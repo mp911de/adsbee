@@ -241,6 +241,7 @@ void GNSSReceiver::SuspendForUartHandover() {
     // and skipping avoids stalling the flash path on boards with no GNSS.
     if (!active_ || suspended_) return;
     suspended_ = true;
+    parser_.InvalidateUTC();
     // Stop UART0 RX IRQ activity and discard queued GNSS bytes before the ESP32 flasher re-routes
     // the same peripheral. The flasher uses polling and must have sole ownership of UART0.
     DisableRxInterrupt();
@@ -270,6 +271,7 @@ void GNSSReceiver::ResumeAfterUartHandover() {
 
 void GNSSReceiver::SetEnable(bool enabled) {
     if (!enabled) {
+        parser_.InvalidateUTC();
         power_enable_pending_ = false;
         DisableRxInterrupt();
     }
@@ -361,4 +363,8 @@ bool GNSSReceiver::HasValidFix() const {
     const GNSSFix& f = parser_.fix();
     if (!f.valid) return false;
     return (get_time_since_boot_ms() - f.last_update_timestamp_ms) < kFixStaleTimeoutMs;
+}
+
+bool GNSSReceiver::GetUTCUnixMs(uint64_t& utc_unix_ms) const {
+    return active_ && !suspended_ && parser_.GetUTCUnixMs(get_time_since_boot_ms(), utc_unix_ms);
 }

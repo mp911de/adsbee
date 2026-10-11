@@ -333,10 +333,15 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
     if (fix.utc_time_valid) {
         snprintf(utc_time, sizeof(utc_time), "%02u:%02u:%02u", fix.utc_hour, fix.utc_minute, fix.utc_second);
     }
-    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu", gnss->HasValidFix(), fix.latitude_deg,
+    uint64_t utc_unix_ms;
+    char utc_epoch[24] = "";
+    if (gnss->GetUTCUnixMs(utc_unix_ms)) {
+        snprintf(utc_epoch, sizeof(utc_epoch), "%llu", static_cast<unsigned long long>(utc_unix_ms));
+    }
+    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s", gnss->HasValidFix(), fix.latitude_deg,
                       fix.longitude_deg, static_cast<long>(fix.altitude_ft), fix.heading_deg,
                       static_cast<long>(fix.speed_kts), static_cast<unsigned int>(fix.num_satellites), utc_time,
-                      static_cast<unsigned long>(gnss->pps_count()));
+                      static_cast<unsigned long>(gnss->pps_count()), utc_epoch);
     CPP_AT_SILENT_SUCCESS();
 }
 

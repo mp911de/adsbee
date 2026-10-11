@@ -55,7 +55,13 @@ class NMEAParser {
         uint32_t last_update_timestamp_ms = 0;  // Caller-supplied timestamp of last applied fix.
     };
 
+    static constexpr uint32_t kUTCStaleTimeoutMs = 5000;
+
     NMEAParser() = default;
+
+    // Extrapolate a recent dated RMC sample, independently of GGA time and position freshness.
+    bool GetUTCUnixMs(uint32_t now_ms, uint64_t& utc_unix_ms) const;
+    void InvalidateUTC() { utc_valid_ = false; }
 
     /**
      * Feed a single received byte into the parser.
@@ -94,4 +100,7 @@ class NMEAParser {
 
     GNSSFix fix_;
     uint32_t timestamp_ms_ = 0;
+    bool utc_valid_ = false;
+    uint64_t utc_unix_ms_ = 0;
+    uint32_t utc_update_timestamp_ms_ = 0;
 };
