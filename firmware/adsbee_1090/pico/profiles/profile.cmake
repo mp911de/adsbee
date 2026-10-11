@@ -22,10 +22,6 @@ if(NOT ADSBEE_SUBGHZ_PROTOCOL MATCHES "^(UAT|FLARM)$")
     message(FATAL_ERROR "Invalid ADSBEE_SUBGHZ_PROTOCOL: ${ADSBEE_SUBGHZ_PROTOCOL}")
 endif()
 
-if(ADSBEE_SUBGHZ_PROTOCOL STREQUAL "FLARM")
-    message(FATAL_ERROR "FLARM radio and packet decoder are not implemented")
-endif()
-
 set(ADSBEE_TI_BUILD_DIR build)
 if(NOT ADSBEE_PROFILE STREQUAL "default")
     set(ADSBEE_TI_BUILD_DIR "build/${CMAKE_BUILD_TYPE}-${ADSBEE_PROFILE}")

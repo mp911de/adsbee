@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "composite_array.hh"
+#include "../flarm/flarm_transport.hh"
 #include "data_structures.hh"
 #include "hal.hh"
 #include "macros.hh"
@@ -76,6 +77,7 @@ class ObjectDictionary {
         kAddrLEDBlink = 0x13,  // Force-blink the slave's LED: uint32_t duration_ms, bypasses led_enabled.
         kAddrDeviceIdentity = 0x14,  // SettingsManager::DeviceIdentity, RP2040 to ESP32 on request.
         kAddrESP32FirmwareHash = 0x15,  // SHA-256 of the running ESP32 application (see ESP32FirmwareCheck).
+        kAddrFlarmPackets = 0x14,  // Local CC1312 -> RP2040 safety traffic only.
         kNumAddrs
     };
 
@@ -103,6 +105,7 @@ class ObjectDictionary {
         kQueueIDLogMessages,        // Queue for log messages.
         kQueueIDSCCommandRequests,  // Queue for SCCommand requests from slave to master.
         kQueueIDConsole,            // Queue for network console messages.
+        kQueueIDFlarmPackets,
         kNumQueueIDs
     };
 
@@ -433,6 +436,10 @@ class ObjectDictionary {
     SettingsManager::DeviceIdentity device_identity = {};
     volatile bool device_identity_valid = false;
 #elif defined(ON_TI)
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+    PFBQueue<FlarmRadioPacket> flarm_packet_queue = PFBQueue<FlarmRadioPacket>({.buf_len_num_elements = 64});
+    uint16_t flarm_packets_dropped = 0;
+#endif
     PFBQueue<RawUATADSBPacket> raw_uat_adsb_packet_queue =
         PFBQueue<RawUATADSBPacket>({.buf_len_num_elements = kDecodedUATADSBPacketQueueDepth,
                                     .buffer = raw_uat_adsb_packet_buffer_,

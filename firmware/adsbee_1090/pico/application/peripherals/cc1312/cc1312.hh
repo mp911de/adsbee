@@ -563,6 +563,7 @@ class CC1312 : public SPICoprocessorSlaveInterface {
     SettingsManager::EnableState enabled_ = SettingsManager::EnableState::kEnableStateDisabled;
     bool enable_is_external_ = false;
     bool in_bootloader_ = false;
+    uint16_t flarm_packets_dropped_ = 0;
     bool flash_crcs_valid_ = false;
     uint32_t application_crc_ = 0;
     uint32_t ccfg_crc_ = 0;

@@ -1,5 +1,6 @@
 
 add_subdirectory(adsb)
+add_subdirectory(flarm)
 add_subdirectory(auto_update)
 add_subdirectory(comms)
 add_subdirectory(coprocessor)
