@@ -83,6 +83,7 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_spi_coprocessor.cc
         test_spi_link_gate.cc
         test_at_console_guard.cc
+        test_at_console_input.cc
         test_auto_update.cc
         test_wifi_network_selector.cc
         test_feed_datagram.cc
@@ -119,6 +120,7 @@ add_subdirectory(uat)
 
 # Make test runnable with "make test".
 enable_testing()
+add_test(NAME build_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/profiles/test_profiles.py)
 
 include(GoogleTest)
 foreach(_test_tgt IN ITEMS host_test host_test_fpu)
