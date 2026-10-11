@@ -3,6 +3,8 @@
 cmake_minimum_required(VERSION 3.16)
 set(TI_MIN_CMAKE_VERSION 3.16)
 
+include("${CMAKE_CURRENT_LIST_DIR}/../../pico/profiles/profile.cmake")
+
 message(STATUS "Current source directory: ${CMAKE_CURRENT_SOURCE_DIR}")
 # Set the SimpleLink SDK path
 set(SIMPLELINK_CC13XX_CC26XX_SDK_INSTALL_DIR "$ENV{TI_LPF2_SDK_PATH}" CACHE PATH "ti-lpf2 SDK install dir.")

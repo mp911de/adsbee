@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -12,9 +13,12 @@ class BuildProfiles(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.profiles = self.root / "profiles"
+        shutil.copytree(PROFILES, self.profiles)
         (self.root / "CMakeLists.txt").write_text(
             'cmake_minimum_required(VERSION 3.13)\nproject(ProfileCheck NONE)\n'
-            f'include("{PROFILES / "profile.cmake"}")\n'
+            f'include("{self.profiles / "profile.cmake"}")\n'
+            'file(WRITE "${CMAKE_BINARY_DIR}/ti_build_dir.txt" "${ADSBEE_TI_BUILD_DIR}")\n'
             'get_directory_property(definitions COMPILE_DEFINITIONS)\n'
             'file(WRITE "${CMAKE_BINARY_DIR}/definitions.txt" "${definitions}")\n'
         )
@@ -26,9 +30,10 @@ class BuildProfiles(unittest.TestCase):
             env["ADSBEE_PROFILE"] = profile
         return env
 
-    def configure(self, profile):
+    def configure(self, profile, build_type="Release"):
         return subprocess.run(
-            ["cmake", "-S", str(self.root), "-B", str(self.root / "build")],
+            ["cmake", "-S", str(self.root), "-B", str(self.root / "build"),
+             f"-DCMAKE_BUILD_TYPE={build_type}"],
             env=self.env(profile), capture_output=True, text=True,
         )
 
@@ -40,6 +45,7 @@ class BuildProfiles(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = self.configure(profile)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("ADSBEE_SUBGHZ_PROTOCOL=ADSBEE_SUBGHZ_PROTOCOL_UAT", self.definitions())
                 self.assertIn(f"ADSBEE_COMMS_UART_CONSOLE={console}", self.definitions())
                 self.assertIn(f"ADSBEE_COMMS_UART_PARITY=UART_PARITY_{parity}", self.definitions())
                 self.assertIn(f'ADSBEE_BUILD_PROFILE="{profile or "default"}"', self.definitions())
@@ -60,6 +66,55 @@ class BuildProfiles(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, mode + suffix)
+
+    def test_ti_build_directory_matches_packaging(self):
+        for profile in [None, "default", "airgrep"]:
+            for mode in ["Release", "Debug"]:
+                self.assertEqual(self.configure(profile, mode).returncode, 0)
+                expected = "build" if profile in [None, "default"] else f"build/{mode}-{profile}"
+                self.assertEqual((self.root / "build/ti_build_dir.txt").read_text(), expected)
+                result = subprocess.run(
+                    ["bash", "-ec", 'source "$1"; profile_ti_build_dir "$2"',
+                     "profile-test", str(PROFILES / "profile.sh"), mode],
+                    env=self.env(profile), capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+
+    def test_flarm_profile_fails_before_packaging_uat_binary(self):
+        (self.profiles / "flarm-test.cmake").write_text("set(ADSBEE_SUBGHZ_PROTOCOL FLARM)\n")
+        result = self.configure("flarm-test")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FLARM radio and packet decoder are not implemented", result.stderr)
+
+    def test_invalid_protocol_fails_configuration(self):
+        (self.profiles / "invalid.cmake").write_text("set(ADSBEE_SUBGHZ_PROTOCOL TYPO)\n")
+        result = self.configure("invalid")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Invalid ADSBEE_SUBGHZ_PROTOCOL", result.stderr)
+
+    def test_receiver_selection_rejects_unimplemented_and_invalid_backends(self):
+        compiler = shutil.which("c++")
+        if compiler is None:
+            self.skipTest("C++ compiler unavailable")
+        header = PROFILES.parent.parent / "ti/sub_ghz_radio/sub_ghz_radio/receiver_config.hh"
+        for selection, error in [
+            (None, None),
+            ("ADSBEE_SUBGHZ_PROTOCOL_UAT", None),
+            ("ADSBEE_SUBGHZ_PROTOCOL_FLARM", "FLARM radio and packet decoder are not implemented"),
+            ("0", "Invalid ADSBEE_SUBGHZ_PROTOCOL"),
+            ("TYPO", "Invalid ADSBEE_SUBGHZ_PROTOCOL"),
+        ]:
+            with self.subTest(selection=selection):
+                args = [compiler, "-x", "c++", "-fsyntax-only", "-include", str(header), "-"]
+                if selection is not None:
+                    args.append(f"-DADSBEE_SUBGHZ_PROTOCOL={selection}")
+                result = subprocess.run(args, input="", capture_output=True, text=True)
+                if error is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(error, result.stderr)
 
     def test_unknown_and_unsafe_profiles_fail(self):
         for profile in ["missing-profile", "../airgrep", "airgrep;true", "airgrep with spaces"]:

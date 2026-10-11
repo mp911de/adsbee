@@ -15,12 +15,19 @@ ADSBEE_PROFILE=airgrep bash firmware/build.sh adsbee_1090 flash
 
 Both use 3.3 V and no flow control. GNSS and USB are unchanged.
 Debug and test builds also have separate profile directories. Flash uses the
-selected profile's image. ESP32 and CC1312 binaries are shared because these
-profiles only change RP2040 behavior. `AT+DEVICE_INFO?` identifies the profile.
+selected profile's image. CC1312 builds also use the profile and have separate
+outputs: `ti/sub_ghz_radio/build/Release-airgrep/` (or `Debug-airgrep`). The default
+keeps `ti/sub_ghz_radio/build/`. RP2040 embeds the selected CC1312 binary.
+ESP32 binaries remain shared. `AT+DEVICE_INFO?` identifies the RP2040 profile.
 
 Edit `airgrep.cmake` for carrier settings. Add another named `.cmake` file for a
 new profile. `profile.cmake` provides upstream defaults before applying it.
 The environment is read on every CMake configure, avoiding stale profile values.
+
+`ADSBEE_SUBGHZ_PROTOCOL` selects the CC1312 radio and decoder together. Both
+profiles currently use `UAT`. `FLARM` is reserved and fails the build until its
+radio setup and decoder are implemented. Set it in `airgrep.cmake` when ready.
+The corresponding C++ constants are in `receiver_config.hh`.
 
 Profiles do not overwrite saved settings. Provision the carrier once through USB:
 

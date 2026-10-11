@@ -1,5 +1,7 @@
 #pragma once
 
+#include "receiver_config.hh"
+
 #include "data_structures.hh"
 #include "uat_packet.hh"
 

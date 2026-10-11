@@ -84,16 +84,17 @@ build_esp() {
 
 build_ti() {
     local build_type=$( [ "$debug" = true ] && echo "Debug" || echo "Release" )
-    echo "=== Building TI CC1312 firmware ($build_type) ==="
-    docker compose run --rm ti-lpf2 bash -c "
+    local ti_build_dir="$(profile_ti_build_dir "$build_type")"
+    echo "=== Building TI CC1312 firmware ($build_type, $ADSBEE_PROFILE) ==="
+    docker compose run --rm -e ADSBEE_PROFILE ti-lpf2 bash -c "
         cd /firmware/adsbee_1090/ti/sub_ghz_radio &&
-        mkdir -p build && cd build &&
-        cmake -DCMAKE_BUILD_TYPE=$build_type \
+        cmake -S . -B $ti_build_dir -DCMAKE_BUILD_TYPE=$build_type \
               -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc \
-              -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ .. &&
+              -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ &&
+        cd $ti_build_dir &&
         cmake --build . --config $build_type --target all -j $jobs
     "
-    echo "=== TI CC1312 build complete: ti/sub_ghz_radio/build/sub_ghz_radio.bin ==="
+    echo "=== TI CC1312 build complete: ti/sub_ghz_radio/$ti_build_dir/sub_ghz_radio.bin ==="
 }
 
 build_pico() {
@@ -106,8 +107,9 @@ build_pico() {
         echo "ERROR: $esp_build_dir/adsbee_esp.bin not found. Run ESP32 build first."
         exit 1
     fi
-    if [ ! -f ti/sub_ghz_radio/build/sub_ghz_radio.bin ]; then
-        echo "ERROR: ti/sub_ghz_radio/build/sub_ghz_radio.bin not found. Run TI build first."
+    local ti_build_dir="$(profile_ti_build_dir "$build_type")"
+    if [ ! -f "ti/sub_ghz_radio/$ti_build_dir/sub_ghz_radio.bin" ]; then
+        echo "ERROR: ti/sub_ghz_radio/$ti_build_dir/sub_ghz_radio.bin not found. Run TI build first."
         exit 1
     fi
     docker compose run --rm -e ADSBEE_PROFILE pico-docker bash -c "

@@ -35,6 +35,7 @@ services:
     network_mode: host
     volumes:
       - ./ti:/firmware/adsbee_1090/ti
+      - ./pico/profiles:/firmware/adsbee_1090/pico/profiles:ro
       - ../common:/firmware/common
       - ../modules:/firmware/modules
       - .vscode:/firmware/adsbee_1090/.vscode
