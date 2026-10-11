@@ -4,6 +4,7 @@
 #include <cstdio>   // Regular pico/stdio.h doesn't support vprint functions.
 
 #include "pico/stdlib.h"
+#include "hardware/irq.h"
 #include "spi_coprocessor.hh"
 
 static const CommsManager::ReportSink kReportingSinks[] = {SettingsManager::SerialInterface::kConsole,
@@ -18,6 +19,15 @@ bool CommsManager::Init() {
     gpio_set_function(config_.comms_uart_rx_pin, GPIO_FUNC_UART);
     uart_set_translate_crlf(config_.comms_uart_handle, false);
     uart_init(config_.comms_uart_handle, SettingsManager::Settings::kDefaultCommsUARTBaudrate);
+    uart_set_format(config_.comms_uart_handle, 8, 1, ADSBEE_COMMS_UART_PARITY);
+    uart_set_hw_flow(config_.comms_uart_handle, false, false);
+    if constexpr (ADSBEE_COMMS_UART_CONSOLE) {
+        queue_init(&comms_uart_rx_queue_, sizeof(uint16_t), 2048);
+        uint irq = config_.comms_uart_handle == uart0 ? UART0_IRQ : UART1_IRQ;
+        irq_set_exclusive_handler(irq, [] { comms_manager.HandleCommsUARTIRQ(); });
+        irq_set_enabled(irq, true);
+        uart_set_irq_enables(config_.comms_uart_handle, true, false);
+    }
 
     gpio_set_function(config_.gnss_uart_tx_pin, GPIO_FUNC_UART);
     gpio_set_function(config_.gnss_uart_rx_pin, GPIO_FUNC_UART);
@@ -31,6 +41,14 @@ bool CommsManager::Init() {
     stdio_set_translate_crlf(&stdio_usb, false);
 
     return true;
+}
+
+void CommsManager::HandleCommsUARTIRQ() {
+    while (uart_is_readable(config_.comms_uart_handle)) {
+        uint16_t value = uart_get_hw(config_.comms_uart_handle)->dr;
+        if (comms_uart_rx_overflow_) value |= UART_UARTDR_OE_BITS;
+        comms_uart_rx_overflow_ = !queue_try_add(&comms_uart_rx_queue_, &value);
+    }
 }
 
 bool CommsManager::Update() {
@@ -132,7 +150,7 @@ bool CommsManager::UpdateNetworkConsole(bool force) {
 int CommsManager::console_printf(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int res = iface_vprintf(SettingsManager::SerialInterface::kConsole, format, args);
+    int res = iface_vprintf(at_command_active_ ? ATReplyInterface() : SettingsManager::kConsole, format, args);
     va_end(args);
     return res;
 }
@@ -194,11 +212,17 @@ bool CommsManager::iface_putc(SettingsManager::SerialInterface iface, char c) {
 bool CommsManager::iface_getc(SettingsManager::SerialInterface iface, char& c) {
     switch (iface) {
         case SettingsManager::kCommsUART:
-            if (uart_is_readable_within_us(config_.comms_uart_handle, config_.uart_timeout_us)) {
-                c = uart_getc(config_.comms_uart_handle);
-                return true;
+            {
+                if constexpr (!ADSBEE_COMMS_UART_CONSOLE) {
+                    if (!uart_is_readable_within_us(config_.comms_uart_handle, config_.uart_timeout_us)) return false;
+                    c = uart_getc(config_.comms_uart_handle);
+                    return true;
+                }
+                uint16_t value;
+                if (!queue_try_remove(&comms_uart_rx_queue_, &value)) return false;
+                c = static_cast<char>(value);
+                return (value & 0xF00) == 0;
             }
-            return false;  // No chars to read.
             break;
         case SettingsManager::kGNSSUART:
             if (uart_is_readable_within_us(config_.gnss_uart_handle, config_.uart_timeout_us)) {

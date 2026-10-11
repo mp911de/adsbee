@@ -19,6 +19,7 @@ set(APPLICATION_HEADER_SECTION_NAME hdr0)
 set(APPLICATION_SECTION_NAME app0)
 
 find_package (Python3 REQUIRED COMPONENTS Interpreter)
+include(profiles/profile.cmake)
 
 add_compile_options(-Wno-packed-bitfield-compat) # Ignore the packed bitfield compatibility warning from GCC 4.4, since we never used GCC that old.
 

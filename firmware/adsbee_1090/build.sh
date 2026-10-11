@@ -11,6 +11,7 @@ set -e
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 cd "$script_dir"
+source pico/profiles/profile.sh
 
 # find_rpi_drive / list_serial_nodes / wait_for_rpi_drive / copy_uf2_and_confirm.
 source ../scripts/uf2_flash_lib.sh
@@ -97,7 +98,8 @@ build_ti() {
 
 build_pico() {
     local build_type=$( [ "$debug" = true ] && echo "Debug" || echo "Release" )
-    echo "=== Building RP2040 Pico firmware ($build_type) ==="
+    local build_variant="$(profile_build_variant "$build_type")"
+    echo "=== Building RP2040 Pico firmware ($build_variant) ==="
     # Check that ESP32 and TI firmware exist.
     local esp_build_dir=$( [ "$debug" = true ] && echo "esp/build/Debug" || echo "esp/build/Release" )
     if [ ! -f $esp_build_dir/adsbee_esp.bin ]; then
@@ -108,22 +110,23 @@ build_pico() {
         echo "ERROR: ti/sub_ghz_radio/build/sub_ghz_radio.bin not found. Run TI build first."
         exit 1
     fi
-    docker compose run --rm pico-docker bash -c "
+    docker compose run --rm -e ADSBEE_PROFILE pico-docker bash -c "
         cd /firmware/adsbee_1090/pico &&
-        mkdir -p build/$build_type && cd build/$build_type &&
+        mkdir -p build/$build_variant && cd build/$build_variant &&
         cmake -DCMAKE_BUILD_TYPE=$build_type \
               -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ../.. &&
         cmake --build . --config $build_type --target all -j $jobs
     "
     echo "=== RP2040 Pico build complete ==="
-    echo "  Firmware: pico/build/$build_type/application/combined.uf2"
-    echo "  OTA:      pico/build/$build_type/application/adsbee_1090.ota"
-    echo "  Release copies: pico/build/$build_type/application/adsbee_1090-<version>.{uf2,ota}"
+    echo "  Firmware: pico/build/$build_variant/application/combined.uf2"
+    echo "  OTA:      pico/build/$build_variant/application/adsbee_1090.ota"
+    echo "  Release copies: pico/build/$build_variant/application/adsbee_1090-<version>.{uf2,ota}"
 }
 
 build_test() {
     local filter="${1:-}"
+    local build_variant="$(profile_build_variant Test)"
     local ctest_filter_opt=""
     if [ -n "$filter" ]; then
         ctest_filter_opt="-R $filter"
@@ -131,13 +134,13 @@ build_test() {
     else
         echo "=== Building and running host tests ==="
     fi
-    docker compose run --rm pico-docker bash -c "
+    docker compose run --rm -e ADSBEE_PROFILE pico-docker bash -c "
         cd /firmware/modules/googletest &&
         mkdir -p build && cd build &&
         cmake -DBUILD_SHARED_LIBS=ON .. &&
         make -j $jobs &&
         cd /firmware/adsbee_1090/pico &&
-        mkdir -p build/Test && cd build/Test &&
+        mkdir -p build/$build_variant && cd build/$build_variant &&
         cmake -DCMAKE_BUILD_TYPE=Test \
               -DCMAKE_C_COMPILER=/usr/bin/gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/g++ ../.. &&
@@ -296,7 +299,7 @@ find_1090_nodes() {
 # staleness check ask for it rather than each spelling out the Debug/Release branch.
 pico_uf2_path() {
     local build_type=$( [ "$debug" = true ] && echo "Debug" || echo "Release" )
-    echo "pico/build/${build_type}/application/combined.uf2"
+    echo "pico/build/$(profile_build_variant "$build_type")/application/combined.uf2"
 }
 
 flash_1090() {
@@ -560,7 +563,7 @@ case "$target" in
         # Flash-only: warn if the image no longer matches the tree, then push it anyway. Scoped to
         # the source trees -- ti/setup holds a ~2 GB vendored SDK and must never be scanned.
         warn_if_artifact_stale "$(pico_uf2_path)" "./build.sh build_and_flash" \
-            ../common ../modules pico/application esp/main ti/sub_ghz_radio
+            ../common ../modules pico/application pico/profiles esp/main ti/sub_ghz_radio
         flash_1090 "$flash_port"
         ;;
     clean)
@@ -573,7 +576,7 @@ case "$target" in
         build_pico
         echo ""
         echo "=== Full build complete! ==="
-        echo "  Output: firmware/pico/build/$build_type/application/combined.uf2"
+        echo "  Output: $(pico_uf2_path)"
         ;;
     *)
         echo "Usage: $0 [-d] [esp|ti|pico|test|build_and_flash|flash|clean|all]"

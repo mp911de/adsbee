@@ -1,7 +1,8 @@
 #pragma once
 
 #include "aircraft_dictionary_config.hh"
-#include "at_console_guard.hh"
+#include "at_console_input.hh"
+#include "pico/util/queue.h"
 #include "composite_array.hh"
 #include "cpp_at.hh"
 #include "data_structures.hh"  // For PFBQueue.
@@ -124,7 +125,7 @@ class CommsManager {
     CPP_AT_CALLBACK(ATBootloader);
 
     /**
-     * Read characters from stdio and the network console into a buffer. Stops when max_len chars
+     * Read payload bytes from the console that issued the command. Stops when max_len chars
      * have been read, when a newline is received (if terminate_on_newline is true), or when
      * timeout_ms elapses.
      * @param buf Buffer to write into. Not null-terminated by this function.
@@ -134,6 +135,11 @@ class CommsManager {
      * @return Number of characters read, or -1 on timeout.
      */
     int32_t ATReadConsole(char* buf, uint16_t max_len, uint32_t timeout_ms, bool terminate_on_newline = false);
+
+    void HandleCommsUARTIRQ();
+    SettingsManager::SerialInterface ATReplyInterface() const {
+        return at_source_ == ATSource::kUART ? SettingsManager::kCommsUART : SettingsManager::kConsole;
+    }
 
     int console_printf(const char* format, ...);
     int console_level_printf(SettingsManager::LogLevel level, const char* format, ...);
@@ -171,7 +177,11 @@ class CommsManager {
                 // Program the hardware, but persist the requested baudrate (not the
                 // hardware-rounded value uart_set_baudrate() returns) so settings round-trip
                 // exactly.
-                uart_set_baudrate(config_.comms_uart_handle, baudrate);
+                if (at_command_active_ && at_source_ == ATSource::kUART) {
+                    pending_comms_baud_ = baudrate;
+                } else {
+                    uart_set_baudrate(config_.comms_uart_handle, baudrate);
+                }
                 settings_manager.settings.baud_rates[SettingsManager::SerialInterface::kCommsUART] = baudrate;
                 return true;
                 break;
@@ -255,15 +265,23 @@ class CommsManager {
    private:
     // AT Functions
     bool UpdateAT();
+    enum class ATSource { kUSB, kNetwork, kUART };
+    void ParseAT(ATSource source, std::string_view line);
+    ATConsoleInput<kATCommandBufMaxLen>& ATInput();
+    bool ReadATByte(char& c, bool& error);
+    ATSource at_source_ = ATSource::kUSB;
+    bool at_command_active_ = false;
+    uint32_t pending_comms_baud_ = 0;
+    queue_t comms_uart_rx_queue_;
+    bool comms_uart_rx_overflow_ = false;
 
     CommsManagerConfig config_;
 
     // Console Settings
     CppAT at_parser_;
-    // Keeps binary AT+OTA=WRITE payloads away from the AT parser (see at_console_guard.hh).
-    ATConsoleGuard at_console_guard_;
-    ATLineAssembler<kATCommandBufMaxLen> stdio_at_line_ = ATLineAssembler<kATCommandBufMaxLen>(at_console_guard_);
-    ATLineAssembler<kATCommandBufMaxLen> network_at_line_ = ATLineAssembler<kATCommandBufMaxLen>(at_console_guard_);
+    ATConsoleInput<kATCommandBufMaxLen> stdio_at_input_;
+    ATConsoleInput<kATCommandBufMaxLen> network_at_input_;
+    ATConsoleInput<kATCommandBufMaxLen> uart_at_input_;
 
     // Queues for incoming / outgoing network console characters.
     char esp32_console_rx_queue_buffer_[kNetworkConsoleBufMaxLen];

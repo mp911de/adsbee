@@ -182,6 +182,10 @@ The ADSBee 1090 is intended to interface easily with external modules via UART! 
 
 ### Connect a Device via UART
 
+The default build uses 115200 8N1 with traffic output on COMMS_UART. The
+[airgrep build profile](../../firmware/adsbee_1090/pico/profiles/README.md) enables
+the UART AT console and even parity (8E1).
+
 1. Connect to the [CLI](#connect-to-cli).
 2. Configure the baudrate of the COMMS UART to your desired value using the `AT+BAUD_RATE` command. For instance, to set the baudrate to 115200 baud on the COMMS UART, send the command: `AT+BAUD_RATE=COMMS_UART,115200`. Verify your setting with `AT+BAUD_RATE?`.
 3. Enable a reporting protocol on the COMMS UART. For instance, to enable CSBEE reporting, send `AT+PROTOCOL_OUT=COMMS_UART,CSBEE`. Verify your setting by checking the output of `AT+PROTOCOL_OUT?`.

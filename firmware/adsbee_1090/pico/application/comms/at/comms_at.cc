@@ -40,7 +40,7 @@ const uint32_t kOTAHeartbeatMs = 50;
 int CppAT::cpp_at_printf(const char* format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = comms_manager.iface_vprintf(SettingsManager::SerialInterface::kConsole, format, args);
+    int ret = comms_manager.iface_vprintf(comms_manager.ATReplyInterface(), format, args);
     va_end(args);
 
     return ret;
@@ -48,48 +48,54 @@ int CppAT::cpp_at_printf(const char* format, ...) {
 
 /** AT Utility Functions **/
 
+ATConsoleInput<CommsManager::kATCommandBufMaxLen>& CommsManager::ATInput() {
+    switch (at_source_) {
+        case ATSource::kUART: return uart_at_input_;
+        case ATSource::kNetwork: return network_at_input_;
+        default: return stdio_at_input_;
+    }
+}
+
+bool CommsManager::ReadATByte(char& c, bool& error) {
+    error = false;
+    switch (at_source_) {
+        case ATSource::kUART: {
+            if constexpr (!ADSBEE_COMMS_UART_CONSOLE) return false;
+            uint16_t value;
+            if (!queue_try_remove(&comms_uart_rx_queue_, &value)) return false;
+            c = static_cast<char>(value);
+            error = (value & 0xF00) != 0;
+            return true;
+        }
+        case ATSource::kNetwork:
+            return esp32_console_rx_queue.Dequeue(c);
+        default: {
+            int value = getchar_timeout_us(0);
+            if (value < 0) return false;
+            c = static_cast<char>(value);
+            return true;
+        }
+    }
+}
+
 int32_t CommsManager::ATReadConsole(char* buf, uint16_t max_len, uint32_t timeout_ms, bool terminate_on_newline) {
     uint16_t len = 0;
     uint32_t start_ms = get_time_since_boot_ms();
     while (len < max_len) {
-        int c = getchar_timeout_us(0);
-        char ch;
-        bool got_char = false;
-        if (c >= 0) {
-            ch = static_cast<char>(c);
-            got_char = true;
+        char c;
+        bool error;
+        if (ReadATByte(c, error)) {
+            if (error) return -1;
+            if (terminate_on_newline && (c == '\r' || c == '\n')) break;
+            buf[len++] = c;
         } else if (esp32.IsEnabled()) {
-            if (esp32_console_rx_queue.Dequeue(ch)) {
-                got_char = true;
-            } else {
-                esp32.Update();
-                // Console output printed while waiting (e.g. by the caller just before) would otherwise stay queued
-                // until the wait ends.
-                UpdateNetworkConsole();
-            }
+            esp32.Update();
+            UpdateNetworkConsole();
         }
-
-        if (got_char) {
-            if (terminate_on_newline && (ch == '\r' || ch == '\n')) {
-                while (getchar_timeout_us(0) >= 0) {
-                }
-                if (esp32.IsEnabled()) {
-                    esp32_console_rx_queue.Clear();
-                }
-                break;
-            }
-            buf[len++] = ch;
-            continue;
-        }
-
-        if (get_time_since_boot_ms() - start_ms > timeout_ms) {
-            return -1;
-        }
+        if (get_time_since_boot_ms() - start_ms > timeout_ms) return -1;
     }
     return static_cast<int32_t>(len);
 }
-
-/** AT Command Callback Functions **/
 
 CPP_AT_CALLBACK(CommsManager::ATBaudRateCallback) {
     switch (op) {
@@ -115,6 +121,7 @@ CPP_AT_CALLBACK(CommsManager::ATBaudRateCallback) {
             }
             uint32_t baud_rate;
             CPP_AT_TRY_ARG2NUM(1, baud_rate);
+            if (baud_rate == 0) CPP_AT_ERROR("Baud rate must be nonzero.");
             if (!SetBaudRate(iface, baud_rate)) {
                 CPP_AT_ERROR("Unable to set baud rate %d on interface %d.", baud_rate, iface);
             }
@@ -382,6 +389,7 @@ CPP_AT_CALLBACK(CommsManager::ATDeviceInfoCallback) {
 #else
             CPP_AT_PRINTF("RP2040 Firmware Build: Release\r\n");
 #endif
+            CPP_AT_PRINTF("RP2040 Build Profile: %s\r\n", ADSBEE_BUILD_PROFILE);
 
             for (uint16_t i = 0; i < SettingsManager::DeviceInfo::kNumOTAKeys; i++) {
                 CPP_AT_PRINTF("OTA Key %d: %s\r\n", i, device_info.ota_keys[i]);
@@ -999,7 +1007,7 @@ CPP_AT_CALLBACK(CommsManager::ATOTACallback) {
 
                     // From READY on, the next len_bytes console bytes are payload. The guard keeps any nested
                     // UpdateAT() off the input and discards whatever part of the payload arrives late.
-                    at_console_guard_.BeginBinaryPayload(len_bytes);
+                    ATInput().guard.BeginBinaryPayload(len_bytes);
                     // Send OK to indicate that we're ready to receive data.
                     CPP_AT_PRINTF("READY\r\n");
                     // The sender waits for READY before sending the payload, so send it now. Console output is batched
@@ -1011,7 +1019,7 @@ CPP_AT_CALLBACK(CommsManager::ATOTACallback) {
                     esp32.update_interval_ms = kOTAHeartbeatMs;  // Faster heartbeat during OTA.
                     int32_t buf_len_bytes = ATReadConsole(reinterpret_cast<char*>(buf), len_bytes, kOTAWriteTimeoutMs);
                     esp32.update_interval_ms = old_esp32_heartbeat_ms;  // Restore old heartbeat.
-                    at_console_guard_.EndBinaryPayload(buf_len_bytes, get_time_since_boot_ms());
+                    ATInput().guard.EndBinaryPayload(buf_len_bytes, get_time_since_boot_ms());
 
                     if (buf_len_bytes < 0) {
                         adsbee.SetReceiver1090Enable(receiver_was_enabled);  // Re-enable receiver before exit.
@@ -2172,55 +2180,36 @@ const CppAT::ATCommandDef_t at_command_list[] = {
 };
 const uint16_t at_command_list_num_commands = sizeof(at_command_list) / sizeof(at_command_list[0]);
 
-bool CommsManager::UpdateAT() {
-    // While an AT+OTA=WRITE payload is being read, every console byte belongs to ATReadConsole(). UpdateAT() can be
-    // reached from inside that callback (network_console_putc() used to call it), so don't touch the input then.
-    if (at_console_guard_.PayloadInProgress()) {
-        return true;
+void CommsManager::ParseAT(ATSource source, std::string_view line) {
+    at_source_ = source;
+    at_command_active_ = true;
+    at_parser_.ParseMessage(line);
+    at_command_active_ = false;
+    if (pending_comms_baud_ != 0) {
+        // Finish the acknowledgement at the old baud rate.
+        uart_tx_wait_blocking(config_.comms_uart_handle);
+        SetBaudRate(SettingsManager::kCommsUART, pending_comms_baud_);
+        pending_comms_baud_ = 0;
     }
-    // Check for new AT commands from STDIO.
-    int ci = getchar_timeout_us(0);
-    while (ci != PICO_ERROR_TIMEOUT) {
-        switch (stdio_at_line_.Push(static_cast<char>(ci), get_time_since_boot_ms())) {
-            case ATLineAssembler<kATCommandBufMaxLen>::kLine:
-                at_parser_.ParseMessage(stdio_at_line_.line());
-                break;
-            case ATLineAssembler<kATCommandBufMaxLen>::kOverflow:
-                CONSOLE_ERROR("CommsManager::UpdateAT", "AT command buffer overflow.");
-                break;
-            case ATLineAssembler<kATCommandBufMaxLen>::kBinaryLine:
-                CONSOLE_WARNING("CommsManager::UpdateAT", "Dropped a console line containing binary data.");
-                break;
-            default:
-                break;
-        }
-        if (at_console_guard_.PayloadInProgress()) {
-            return true;  // A command above started reading a binary payload (can't happen after it returns, but be safe).
-        }
-        ci = getchar_timeout_us(0);
-    }
+    at_source_ = ATSource::kUSB;
+}
 
-    if (esp32.IsEnabled()) {
-        // Receive incoming network console characters.
+bool CommsManager::UpdateAT() {
+    if (at_command_active_) return true;
+    for (ATSource source : {ATSource::kUSB, ATSource::kNetwork, ATSource::kUART}) {
+        if (source == ATSource::kUART && !ADSBEE_COMMS_UART_CONSOLE) continue;
+        at_source_ = source;
+        auto& input = ATInput();
         char c;
-        while (!at_console_guard_.PayloadInProgress() && esp32_console_rx_queue.Dequeue(c)) {
-            switch (network_at_line_.Push(c, get_time_since_boot_ms())) {
-                case ATLineAssembler<kATCommandBufMaxLen>::kLine:
-                    CONSOLE_INFO("CommsManager::UpdateAT", "Received network console message: %.*s\r\n",
-                                 (int)network_at_line_.line().length(), network_at_line_.line().data());
-                    at_parser_.ParseMessage(network_at_line_.line());
-                    break;
-                case ATLineAssembler<kATCommandBufMaxLen>::kOverflow:
-                    CONSOLE_ERROR("CommsManager::UpdateAT", "Network console buffer overflow.");
-                    break;
-                case ATLineAssembler<kATCommandBufMaxLen>::kBinaryLine:
-                    CONSOLE_WARNING("CommsManager::UpdateAT", "Dropped a network console line containing binary data.");
-                    break;
-                default:
-                    break;
+        bool error;
+        // Bound work so a continuous sender cannot starve receiver processing.
+        for (uint16_t i = 0; i < kATCommandBufMaxLen && ReadATByte(c, error); ++i) {
+            if (input.Push(c, get_time_since_boot_ms(), error)) {
+                ParseAT(source, input.line());
+                at_source_ = source;
             }
         }
     }
-
+    at_source_ = ATSource::kUSB;
     return true;
 }
