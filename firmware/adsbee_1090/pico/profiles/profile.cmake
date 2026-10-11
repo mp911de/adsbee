@@ -1,0 +1,25 @@
+# Read the environment each configure so switching profiles cannot reuse cached settings.
+set(ADSBEE_PROFILE "$ENV{ADSBEE_PROFILE}")
+if(ADSBEE_PROFILE STREQUAL "")
+    set(ADSBEE_PROFILE default)
+endif()
+if(NOT ADSBEE_PROFILE MATCHES "^[a-z][a-z0-9_-]*$")
+    message(FATAL_ERROR "Invalid ADSBEE_PROFILE: ${ADSBEE_PROFILE}")
+endif()
+
+set(ADSBEE_COMMS_UART_CONSOLE 0)
+set(ADSBEE_COMMS_UART_PARITY NONE)
+if(NOT ADSBEE_PROFILE STREQUAL "default")
+    include("${CMAKE_CURRENT_LIST_DIR}/${ADSBEE_PROFILE}.cmake")
+endif()
+if(NOT ADSBEE_COMMS_UART_CONSOLE MATCHES "^[01]$" OR
+   NOT ADSBEE_COMMS_UART_PARITY MATCHES "^(NONE|EVEN|ODD)$")
+    message(FATAL_ERROR "Invalid UART settings in profile ${ADSBEE_PROFILE}")
+endif()
+
+message(STATUS "ADSBee profile: ${ADSBEE_PROFILE}")
+add_compile_definitions(
+    ADSBEE_BUILD_PROFILE="${ADSBEE_PROFILE}"
+    ADSBEE_COMMS_UART_CONSOLE=${ADSBEE_COMMS_UART_CONSOLE}
+    ADSBEE_COMMS_UART_PARITY=UART_PARITY_${ADSBEE_COMMS_UART_PARITY}
+)
