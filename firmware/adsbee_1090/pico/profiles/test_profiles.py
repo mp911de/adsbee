@@ -45,7 +45,8 @@ class BuildProfiles(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = self.configure(profile)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("ADSBEE_SUBGHZ_PROTOCOL=ADSBEE_SUBGHZ_PROTOCOL_UAT", self.definitions())
+                self.assertIn("ADSBEE_SUBGHZ_PROTOCOL=ADSBEE_SUBGHZ_PROTOCOL_" +
+                              ("FLARM" if profile == "airgrep" else "UAT"), self.definitions())
                 self.assertIn(f"ADSBEE_COMMS_UART_CONSOLE={console}", self.definitions())
                 self.assertIn(f"ADSBEE_COMMS_UART_PARITY=UART_PARITY_{parity}", self.definitions())
                 self.assertIn(f'ADSBEE_BUILD_PROFILE="{profile or "default"}"', self.definitions())
@@ -81,19 +82,13 @@ class BuildProfiles(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
 
-    def test_flarm_profile_fails_before_packaging_uat_binary(self):
-        (self.profiles / "flarm-test.cmake").write_text("set(ADSBEE_SUBGHZ_PROTOCOL FLARM)\n")
-        result = self.configure("flarm-test")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("FLARM radio and packet decoder are not implemented", result.stderr)
-
     def test_invalid_protocol_fails_configuration(self):
         (self.profiles / "invalid.cmake").write_text("set(ADSBEE_SUBGHZ_PROTOCOL TYPO)\n")
         result = self.configure("invalid")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Invalid ADSBEE_SUBGHZ_PROTOCOL", result.stderr)
 
-    def test_receiver_selection_rejects_unimplemented_and_invalid_backends(self):
+    def test_receiver_selection_rejects_invalid_backends(self):
         compiler = shutil.which("c++")
         if compiler is None:
             self.skipTest("C++ compiler unavailable")
@@ -101,7 +96,7 @@ class BuildProfiles(unittest.TestCase):
         for selection, error in [
             (None, None),
             ("ADSBEE_SUBGHZ_PROTOCOL_UAT", None),
-            ("ADSBEE_SUBGHZ_PROTOCOL_FLARM", "FLARM radio and packet decoder are not implemented"),
+            ("ADSBEE_SUBGHZ_PROTOCOL_FLARM", None),
             ("0", "Invalid ADSBEE_SUBGHZ_PROTOCOL"),
             ("TYPO", "Invalid ADSBEE_SUBGHZ_PROTOCOL"),
         ]:

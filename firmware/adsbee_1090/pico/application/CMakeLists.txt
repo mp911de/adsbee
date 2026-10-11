@@ -88,6 +88,7 @@ if (ON_EMBEDDED_DEVICE)
     target_sources(application PRIVATE ${CMAKE_CURRENT_LIST_DIR}/peripherals/esp32/bin/binaries.c)
 
     ## Embed TI CC1312 binary into the app.
+    include("${CMAKE_SOURCE_DIR}/profiles/verify_ti_firmware.cmake")
     configure_file(${CMAKE_SOURCE_DIR}/../ti/sub_ghz_radio/${ADSBEE_TI_BUILD_DIR}/sub_ghz_radio.bin
         ${CMAKE_CURRENT_LIST_DIR}/peripherals/cc1312/bin/sub_ghz_radio.bin
         COPYONLY

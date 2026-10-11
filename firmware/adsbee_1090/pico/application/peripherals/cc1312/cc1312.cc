@@ -3,6 +3,7 @@
 // Get access to raw application binary for flashing.
 #include "adsbee.hh"  // Get access to subg radio for calling higher level interaction functions.
 #include "bin/binaries.c"
+#include "gnss_interface.hh"
 #include "crc.hh"  // For IEEE 802.3 CRC32 calculation.
 #include "hal.hh"
 
@@ -114,6 +115,7 @@ bool CC1312::Init(bool spi_already_initialized) {
 bool CC1312::Update() {
     // Report a lost link once; reads fail fast and quietly while it stays down (see SPILinkGate).
     bool link_was_down = adsbee.subg_radio.IsLinkDown();
+    uint32_t previous_device_timestamp = device_status.timestamp_ms;
     // Query CC1312's device status.
     if (adsbee.subg_radio.Read(ObjectDictionary::Address::kAddrDeviceStatus, device_status)) {
         // We only update the device_status vars exposed publicly here. Other reads of device_status are for
@@ -127,6 +129,34 @@ bool CC1312::Update() {
             device_status.num_raw_uat_adsb_packets, device_status.num_valid_uat_adsb_packets,
             device_status.num_raw_uat_uplink_packets, device_status.num_valid_uat_uplink_packets);
 
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        if (uint32_t(device_status.timestamp_ms - previous_device_timestamp) >= 0x80000000u)
+            adsbee.flarm_traffic.Clear();
+        uint64_t utc_ms;
+        bool utc_valid = gnss->GetUTCUnixMs(utc_ms);
+        if (!utc_valid) adsbee.flarm_traffic.Clear();
+        if (device_status.pending_raw_packets_len_bytes) {
+            if (device_status.pending_raw_packets_len_bytes != sizeof(FlarmBatch)) return false;
+            FlarmBatch batch;
+            uint32_t received_ms = get_time_since_boot_ms();
+            if (!adsbee.subg_radio.Read(ObjectDictionary::kAddrFlarmPackets, batch) ||
+                batch.version != 1 || batch.count > FlarmBatch::kCapacity) return false;
+            if (uint16_t lost = batch.dropped - flarm_packets_dropped_) {
+                flarm_packets_dropped_ = batch.dropped;
+                CONSOLE_WARNING("CC1312::Update", "CC1312 dropped %u FLARM packets.", lost);
+            }
+            if (utc_valid) {
+                const auto& fix = gnss->fix();
+                bool reference_valid = gnss->HasValidFix();
+                int32_t lat = reference_valid ? static_cast<int32_t>(double(fix.latitude_deg) * 1e7) : 0;
+                int32_t lon = reference_valid ? static_cast<int32_t>(double(fix.longitude_deg) * 1e7) : 0;
+                for (unsigned i = 0; i < batch.count; ++i)
+                    adsbee.flarm_traffic.Ingest(batch.packets[i], received_ms, utc_ms, reference_valid, lat, lon);
+            }
+            ObjectDictionary::RollQueueRequest roll{.queue_id = ObjectDictionary::kQueueIDFlarmPackets, .num_items = batch.count};
+            if (!adsbee.subg_radio.Write(ObjectDictionary::kAddrRollQueue, roll, true)) return false;
+        }
+#else
         // Read packets from queues.
         uint8_t read_buf[CompositeArray::RawPackets::kMaxLenBytes] = {0};
         // Read with full size of array, let the CC1312 fill it out with as many packets as possible.
@@ -141,8 +171,12 @@ bool CC1312::Update() {
             CONSOLE_ERROR("CC1312::Update", "Failed to unpack raw packets from CC1312.");
             return false;
         }
+#endif
 
     } else {
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        adsbee.flarm_traffic.Clear();
+#endif
         if (!link_was_down) CONSOLE_ERROR("CC1312::Update", "Unable to read CC1312 status.");
         return false;
     }

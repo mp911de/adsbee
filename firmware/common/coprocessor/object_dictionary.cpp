@@ -16,6 +16,10 @@
 #elif defined(ON_TI)
 #include "cpu_utils.hh"
 #include "pico.hh"  // pico_ll.BlinkSubGLED() for kAddrLEDBlink.
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+#include "sub_ghz_radio.hh"
+#include <ti/drivers/dpl/HwiP.h>
+#endif
 #endif
 
 #include "comms.hh"
@@ -106,6 +110,14 @@ bool ObjectDictionary::SetBytes(Address addr, uint8_t* buf, uint16_t buf_len, ui
                         }
                     }
                     break;
+#if defined(ON_TI) && ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+                case kQueueIDFlarmPackets: {
+                    uintptr_t key = HwiP_disable();
+                    bool ok = roll_request.num_items <= FlarmBatch::kCapacity && flarm_packet_queue.Discard(roll_request.num_items);
+                    HwiP_restore(key);
+                    return ok;
+                }
+#endif
                 case kQueueIDConsole:
 #ifdef ON_ESP32
                     if (xSemaphoreTake(object_dictionary.network_console_rx_queue_mutex,
@@ -495,6 +507,21 @@ bool ObjectDictionary::GetBytes(Address addr, uint8_t* buf, uint16_t buf_len, ui
             break;
         }
 #elif defined(ON_TI)
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        case kAddrFlarmPackets: {
+            if (offset != 0 || buf_len != sizeof(FlarmBatch)) return false;
+            FlarmBatch batch;
+            uintptr_t key = HwiP_disable();
+            batch.dropped = flarm_packets_dropped;
+            while (batch.count < FlarmBatch::kCapacity && flarm_packet_queue.Peek(batch.packets[batch.count], batch.count)) {
+                batch.packets[batch.count].age_ms = get_time_since_boot_ms() - batch.packets[batch.count].age_ms;
+                ++batch.count;
+            }
+            HwiP_restore(key);
+            memcpy(buf, &batch, sizeof(batch));
+            return true;
+        }
+#endif
         case kAddrCompositeArrayRawPackets: {
             if (offset != 0) {
                 CONSOLE_ERROR("ObjectDictionary::GetBytes",
@@ -613,6 +640,9 @@ void ObjectDictionary::UpdateDeviceStatus() {
         .num_valid_uat_adsb_packets = metrics.num_valid_uat_adsb_packets,
         .num_raw_uat_uplink_packets = metrics.num_raw_uat_uplink_packets,
         .num_valid_uat_uplink_packets = metrics.num_valid_uat_uplink_packets};
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+    device_status.pending_raw_packets_len_bytes = flarm_packet_queue.Length() ? sizeof(FlarmBatch) : 0;
+#endif
     // Reset metrics after reading.
     metrics = {0};
 #endif

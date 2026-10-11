@@ -1,8 +1,6 @@
-target_sources(sub_ghz_radio PRIVATE
-    smartrf/smartrf_settings.c
-    sub_ghz_radio.cpp
-    uat_packet_decoder.cpp
-)
-target_include_directories(sub_ghz_radio PRIVATE
-    .
-)
+if(ADSBEE_SUBGHZ_PROTOCOL STREQUAL "FLARM")
+    target_sources(sub_ghz_radio PRIVATE flarm_radio.cpp smartrf/flarm_settings.c)
+else()
+    target_sources(sub_ghz_radio PRIVATE smartrf/smartrf_settings.c sub_ghz_radio.cpp uat_packet_decoder.cpp)
+endif()
+target_include_directories(sub_ghz_radio PRIVATE .)

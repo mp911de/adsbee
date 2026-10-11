@@ -151,3 +151,8 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Creating binary file"
 )
 
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/receiver_protocol.txt" "${ADSBEE_SUBGHZ_PROTOCOL}\n")
+add_custom_command(TARGET sub_ghz_radio POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_BINARY_DIR}/receiver_protocol.txt"
+            "${CMAKE_CURRENT_BINARY_DIR}/sub_ghz_radio.protocol")

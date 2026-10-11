@@ -1,5 +1,6 @@
 #ifndef _ADS_BEE_HH_
 #define _ADS_BEE_HH_
+#include "flarm_traffic.hh"
 
 #include "aircraft_dictionary.hh"
 #include "bsp.hh"
@@ -459,6 +460,9 @@ class ADSBee {
         {.buf_len_num_elements = kRawRemoteIDPacketQueueDepth, .buffer = raw_remote_id_packet_queue_buffer_});
 
     AircraftDictionary aircraft_dictionary;
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+    FlarmTraffic flarm_traffic;
+#endif
     CC1312 subg_radio_ll = CC1312({});
     SPICoprocessor subg_radio = SPICoprocessor({.interface = subg_radio_ll, .tag_str = "CC1312"});
 

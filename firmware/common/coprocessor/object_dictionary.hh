@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "composite_array.hh"
+#include "../flarm/flarm_transport.hh"
 #include "data_structures.hh"
 #include "hal.hh"
 #include "macros.hh"
@@ -73,6 +74,7 @@ class ObjectDictionary {
         kAddrESP32RebootInfo = 0x11,           // ESP32 last reset reason and optional core dump summary.
         kAddrESP32TriggerAbort = 0x12,         // Debug only: trigger abort() on the ESP32 to test core dump.
         kAddrLEDBlink = 0x13,  // Force-blink the slave's LED: uint32_t duration_ms, bypasses led_enabled.
+        kAddrFlarmPackets = 0x14,  // Local CC1312 -> RP2040 safety traffic only.
         kNumAddrs
     };
 
@@ -100,6 +102,7 @@ class ObjectDictionary {
         kQueueIDLogMessages,        // Queue for log messages.
         kQueueIDSCCommandRequests,  // Queue for SCCommand requests from slave to master.
         kQueueIDConsole,            // Queue for network console messages.
+        kQueueIDFlarmPackets,
         kNumQueueIDs
     };
 
@@ -422,6 +425,10 @@ class ObjectDictionary {
     CompositeDeviceStatus composite_device_status = {};
     ESP32DeviceStatus device_status = {};
 #elif defined(ON_TI)
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+    PFBQueue<FlarmRadioPacket> flarm_packet_queue = PFBQueue<FlarmRadioPacket>({.buf_len_num_elements = 64});
+    uint16_t flarm_packets_dropped = 0;
+#endif
     PFBQueue<RawUATADSBPacket> raw_uat_adsb_packet_queue =
         PFBQueue<RawUATADSBPacket>({.buf_len_num_elements = kDecodedUATADSBPacketQueueDepth,
                                     .buffer = raw_uat_adsb_packet_buffer_,

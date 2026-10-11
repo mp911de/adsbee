@@ -395,6 +395,11 @@ CPP_AT_CALLBACK(CommsManager::ATDeviceInfoCallback) {
             CPP_AT_PRINTF("RP2040 Firmware Build: Release\r\n");
 #endif
             CPP_AT_PRINTF("RP2040 Build Profile: %s\r\n", ADSBEE_BUILD_PROFILE);
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+            CPP_AT_PRINTF("Sub-GHz Protocol: FLARM FAMP (receive only)\r\n");
+#else
+            CPP_AT_PRINTF("Sub-GHz Protocol: UAT\r\n");
+#endif
 
             for (uint16_t i = 0; i < SettingsManager::DeviceInfo::kNumOTAKeys; i++) {
                 CPP_AT_PRINTF("OTA Key %d: %s\r\n", i, device_info.ota_keys[i]);

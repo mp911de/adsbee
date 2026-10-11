@@ -1,3 +1,4 @@
+enable_testing()
 add_executable(host_test main.cc)
 add_executable(host_test_fpu main.cc)
 
@@ -53,6 +54,7 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_mode_s_single_bit_correction.cc
         test_mode_s_single_bit_filter.cc
         test_nmea_parser.cc
+        test_flarm.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc
         test_platform.cc
         test_reporting_aircraftjson.cc
@@ -92,7 +94,6 @@ endforeach()
 add_subdirectory(uat)
 
 # Make test runnable with "make test".
-enable_testing()
 add_test(NAME build_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/profiles/test_profiles.py)
 
 include(GoogleTest)

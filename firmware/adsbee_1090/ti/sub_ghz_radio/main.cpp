@@ -21,7 +21,9 @@ extern "C" {
 #include "spi_coprocessor.hh"
 #include "spi_coprocessor_interface.hh"
 #include "sub_ghz_radio.hh"
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_UAT
 #include "uat_packet_decoder.hh"
+#endif
 
 // #include "unistd.h" // For usleep.
 #include <cstring>  // For malloc
@@ -42,7 +44,9 @@ SPICoprocessor pico = SPICoprocessor({.interface = pico_ll});
 CommsManager comms_manager = CommsManager({});
 SettingsManager settings_manager = SettingsManager();
 SubGHzRadio subg_radio = SubGHzRadio({});
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_UAT
 UATPacketDecoder uat_packet_decoder = UATPacketDecoder();
+#endif
 
 /**
  * A note on interrupt priorities (configured via Sysconfig):
@@ -126,7 +130,9 @@ int main(void) {
         user_core_monitor.Update();
 
         pico.UpdateLED();
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_UAT
         uat_packet_decoder.Update();
+#endif
         subg_radio.Update();
     }
 }

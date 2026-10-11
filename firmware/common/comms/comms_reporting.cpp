@@ -275,6 +275,9 @@ bool CommsManager::UpdateReporting(const ReportSink* sinks, const SettingsManage
 
         // Activate rounds for protocols that currently have sinks.
         csbee_round_active_ = (num_csbee_sinks > 0);
+#if defined(ADSBEE_SUBGHZ_PROTOCOL_FLARM) && ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        adsbee.flarm_traffic.BeginReport();
+#endif
         mavlink1_round_active_ = (num_mavlink1_sinks > 0);
         mavlink2_round_active_ = (num_mavlink2_sinks > 0);
         gdl90_round_active_ = (num_gdl90_all_sinks > 0);
@@ -580,6 +583,21 @@ bool CommsManager::ReportCSBee(ReportSink* sinks, uint16_t num_sinks) {
 
         ret &= SendBufToSinks(sinks, num_sinks, message, message_len_bytes, csbee_tally, 1, uid);
     }
+#if defined(ADSBEE_SUBGHZ_PROTOCOL_FLARM) && ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+    // Local FLARM targets follow the aircraft on the same sinks.
+    while (true) {
+        if (get_time_since_boot_ms() - chunk_start_ms >= kCSBeeChunkBudgetMs) return ret;
+        char message[kCSBeeMessageStrMaxLen];
+        int message_len_bytes = adsbee.flarm_traffic.NextReport(message, sizeof(message), get_time_since_boot_ms());
+        if (message_len_bytes == 0) break;
+        if (message_len_bytes < 0) {
+            csbee_tally.num_build_failures++;
+            ret = false;
+            continue;
+        }
+        ret &= SendBufToSinks(sinks, num_sinks, message, message_len_bytes, csbee_tally);
+    }
+#endif
 
     // All UIDs in the snapshot have been processed — send the statistics footer.
     char stats_message[kCSBeeMessageStrMaxLen];

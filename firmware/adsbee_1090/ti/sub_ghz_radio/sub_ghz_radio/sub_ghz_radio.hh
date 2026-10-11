@@ -2,6 +2,10 @@
 
 #include "receiver_config.hh"
 
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+#include "flarm_radio.hh"
+#else
+
 extern "C" {
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/rf/RF.h>
@@ -99,3 +103,4 @@ private:
 };
 
 extern SubGHzRadio subg_radio;
+#endif

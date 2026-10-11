@@ -24,18 +24,34 @@ Edit `airgrep.cmake` for carrier settings. Add another named `.cmake` file for a
 new profile. `profile.cmake` provides upstream defaults before applying it.
 The environment is read on every CMake configure, avoiding stale profile values.
 
-`ADSBEE_SUBGHZ_PROTOCOL` selects the CC1312 radio and decoder together. Both
-profiles currently use `UAT`. `FLARM` is reserved and fails the build until its
-radio setup and decoder are implemented. Set it in `airgrep.cmake` when ready.
-The corresponding C++ constants are in `receiver_config.hh`.
+`ADSBEE_SUBGHZ_PROTOCOL` selects the CC1312 radio and decoder together. `default`
+uses `UAT`; `airgrep` uses receive-only European FAMP at 868.2/868.4 MHz.
+RP2040 decodes FAMP using fresh GNSS UTC and reconstructs coordinates from its GNSS
+position. Without UTC, FLARM packets are discarded. Without a position fix, `#F`
+coordinates are empty. Reception on the 1090U RF hardware needs bench validation.
+
+FLARM targets are held in a separate 64-entry RAM table and expire after five
+seconds without reception. `#F` records follow `#A`/`#U` on every interface with
+CSBEE enabled (`AT+PROTOCOL_OUT=<iface>,CSBEE`), including USB and the network
+console. Other protocols, ESP32 feeds, logs and persistent storage receive no FLARM
+target data. Stealth/no-track flags remain present for local collision detection.
+The display must enforce privacy for identifiers and performance information.
+
+The `#F` v1 contract is in [common/flarm/README.md](../../../common/flarm/README.md).
+The [FFPP license](../../../common/flarm/FLARM_FFPP_LICENSE.md) must accompany
+firmware distributions containing this decoder. No transmitter is implemented.
 
 Profiles do not overwrite saved settings. Provision the carrier once through USB:
 
 ```text
 AT+BAUD_RATE=COMMS_UART,115200
 AT+PROTOCOL_OUT=COMMS_UART,CSBEE
+AT+GNSS=1,GENERIC
 AT+SETTINGS=SAVE
 ```
+
+Use `UBX_MIA` instead of `GENERIC` for that GNSS module. Check `AT+GNSS_FIX?`
+for a fresh fix and a non-empty UTC epoch field before expecting FLARM reports.
 
 On the airgrep link, send LF or CRLF and keep one command outstanding. Replies
 return over UART. CSBEE traffic starts with `#` and carries CRC16, which the
