@@ -7,6 +7,14 @@ if [[ ! "$ADSBEE_PROFILE" =~ ^[a-z][a-z0-9_-]*$ ]] ||
     return 1
 fi
 
+profile_ti_build_dir() {
+    if [ "$ADSBEE_PROFILE" = default ]; then
+        printf 'build'
+    else
+        printf 'build/%s-%s' "$1" "$ADSBEE_PROFILE"
+    fi
+}
+
 profile_build_variant() {
     if [ "$ADSBEE_PROFILE" = default ]; then
         printf '%s' "$1"

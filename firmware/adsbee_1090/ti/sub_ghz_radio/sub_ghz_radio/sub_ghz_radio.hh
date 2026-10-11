@@ -1,5 +1,7 @@
 #pragma once
 
+#include "receiver_config.hh"
+
 extern "C" {
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/rf/RF.h>
