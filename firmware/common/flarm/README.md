@@ -12,9 +12,6 @@ in the CSBEE round after the `#A`/`#U` records, on every interface with CSBEE en
 
 ## CSBEE #F version 1
 
-The identity contract below is approved for the unshipped v1; serializer and tracker
-changes are pending implementation.
-
 One ASCII line, commas, CRLF, existing CSBEE CRC16 over `#` through the comma
 preceding CRC. CRC is uppercase hexadecimal, 1-4 digits. Missing fields are empty.
 The first `1` is the record version; VER is the sender's FAMP version.
@@ -49,10 +46,26 @@ same ID across rotations. Native EPRA addresses stay internal. UART and GDL90
 consume the same resolved identity; consumers do not reconstruct EPRA continuity.
 
 Records are emitted once per CSBEE round, before the `#S` footer. The 64-entry local table
-expires targets after 5 seconds; when full, the oldest reception is replaced.
+expires targets after 60 seconds; when full, the oldest reception is replaced.
 No-track and stealth packets remain available for local conflict detection.
 Consumers must keep no-track data out of persistent logs and external feeds and
 apply display privacy to identifiers and performance details.
+
+## Onboard GDL90
+
+The RP2040 pushes complete target snapshots to the ESP32 over SPI alongside metrics.
+Snapshots preserve reception and fix ages. Only complete, validated transfers publish.
+The ESP32 sends FLARM traffic to local Wi-Fi clients on UDP port 4000 using the
+existing GDL90 encoder and queue. Remote feeds receive no FLARM traffic.
+
+Each newer valid position is eligible once, on the one-second reporting cycle.
+Fixes older than six seconds at emission are skipped. Retained coordinates are
+never replayed or extrapolated. Stealth/no-track and ownship ICAO targets are filtered.
+Pressure altitude is unavailable; FAMP geometric altitude is not substituted.
+
+See the [export contract](../../../docs/adr/0001-flarm-gdl90-onboard-export.md) for
+integrity, aircraft-type and duplicate-source mappings. ForeFlight and SkyDemon
+handling of unavailable altitude and self-assigned addresses needs device validation.
 
 UTC derives from dated RMC sentences, with 5-second freshness and no PPS discipline.
 Without UTC the RP2040 discards packets until time becomes available.

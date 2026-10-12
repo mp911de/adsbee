@@ -1191,6 +1191,12 @@ class AircraftDictionary {
     static AddressSourceRank GetAddressSourceRank(const AircraftEntry& entry, uint32_t& icao_address);
 
     /**
+     * Returns the 24-bit self-assigned (non-ICAO) address of a Remote ID or UAT self-assigned entry, UINT32_MAX
+     * otherwise. Used to keep locally generated synthetic addresses out of exported type-1 address space.
+     */
+    static uint32_t GetSelfAssignedAddress(const AircraftEntry& entry);
+
+    /**
      * Returns whether the entry with the given UID is the one to report for its ICAO address (see
      * kPreferredReportPositionFreshMs). Entries that aren't ICAO-addressed are always reported.
      * @param[in] uid UID of the entry.

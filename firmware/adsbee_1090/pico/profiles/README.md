@@ -30,11 +30,11 @@ RP2040 decodes FAMP using fresh GNSS UTC and reconstructs coordinates from its G
 position. Without UTC, FLARM packets are discarded. Without a position fix, `#F`
 coordinates are empty. Reception on the 1090U RF hardware needs bench validation.
 
-FLARM targets are held in a separate 64-entry RAM table and expire after five
+FLARM targets are held in a separate 64-entry RAM table and expire after 60
 seconds without reception. `#F` records follow `#A`/`#U` on every interface with
 CSBEE enabled (`AT+PROTOCOL_OUT=<iface>,CSBEE`), including USB and the network
-console. Other protocols, ESP32 feeds, logs and persistent storage receive no FLARM
-target data. Stealth/no-track flags remain present for local collision detection.
+console. The onboard ESP32 also reports eligible FLARM positions through local
+Wi-Fi GDL90. Remote feeds receive no FLARM target data. Stealth/no-track flags remain present for local collision detection.
 The display must enforce privacy for identifiers and performance information.
 
 The `#F` v1 contract is in [common/flarm/README.md](../../../common/flarm/README.md).

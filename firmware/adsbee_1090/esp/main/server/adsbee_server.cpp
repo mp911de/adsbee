@@ -161,7 +161,25 @@ bool ADSBeeServer::Init() {
     return TCPServerInit();
 }
 
+bool ADSBeeServer::ReceiveFlarmTargets(const uint8_t* bytes, size_t length, size_t offset) {
+    if (!flarm_mutex_ || xSemaphoreTake(flarm_mutex_, 0) != pdTRUE) return false;
+    uint32_t now_ms = get_time_since_boot_ms();
+    bool ok = flarm_receiver_.Write(bytes, length, offset, now_ms);
+    xSemaphoreGive(flarm_mutex_);
+    static uint32_t last_error_ms = 0;
+    if (!ok && now_ms - last_error_ms >= 10000) {
+        last_error_ms = now_ms;
+        CONSOLE_ERROR("ADSBeeServer::ReceiveFlarmTargets", "Rejected FLARM snapshot chunk (offset %u, %u bytes).",
+                      (unsigned)offset, (unsigned)length);
+    }
+    return ok;
+}
+
 bool ADSBeeServer::Update() {
+    if (flarm_mutex_ && xSemaphoreTake(flarm_mutex_, 0) == pdTRUE) {
+        flarm_gdl90_.Update(flarm_receiver_.Snapshot(), flarm_receiver_.ReceivedMs());
+        xSemaphoreGive(flarm_mutex_);
+    }
     bool ret = true;
     // Do NOT call pico.Update() from here since that's already taken care of by the SPIReceiveTask.
     // Update the LED here so it has better time resolution than it would in the SPI task, which blocks frequently.
@@ -397,7 +415,8 @@ bool ADSBeeServer::ReportGDL90() {
     uint32_t timestamp_ms = get_time_since_boot_ms();
     for (auto& itr : aircraft_dictionary.dict) {
         aircraft_index++;
-        if (!aircraft_dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms)) {
+        if (!aircraft_dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms) ||
+            flarm_gdl90_.SuppressesAircraft(itr.first, aircraft_dictionary, timestamp_ms)) {
             continue;  // Another entry (e.g. the aircraft's own ADS-B) is reported for this ICAO address.
         }
 
@@ -449,6 +468,21 @@ bool ADSBeeServer::ReportGDL90() {
             memcpy(message.data, aircraft_msg_buf, aircraft_msg_buf_len);
             message.len = aircraft_msg_buf_len;
         }
+    }
+
+    // Local FLARM targets share the aircraft message stream.
+    for (size_t i = 0; i < flarm_gdl90_.Count(); ++i) {
+        aircraft_msg_buf_len = flarm_gdl90_.WriteReport(i, aircraft_msg_buf, sizeof(aircraft_msg_buf), timestamp_ms,
+                                                        aircraft_dictionary, ownship_data.participant_address);
+        if (!aircraft_msg_buf_len) continue;
+        if (message.len + aircraft_msg_buf_len > CommsManager::NetworkMessage::kMaxLenBytes) {
+            if (!comms_manager.WiFiAccessPointSendMessageToAllStations(message)) {
+                CONSOLE_ERROR("ADSBeeServer::ReportGDL90", "Failed to send FLARM message to all clients.");
+            }
+            message.len = 0;
+        }
+        memcpy(message.data + message.len, aircraft_msg_buf, aircraft_msg_buf_len);
+        message.len += aircraft_msg_buf_len;
     }
 
     // Send any remaining message data.

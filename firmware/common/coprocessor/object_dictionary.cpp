@@ -156,6 +156,8 @@ bool ObjectDictionary::SetBytes(Address addr, uint8_t* buf, uint16_t buf_len, ui
             break;
         }
 #ifdef ON_ESP32
+        case kAddrFlarmTargets:
+            return adsbee_server.ReceiveFlarmTargets(buf, buf_len, offset);
         case kAddrConsole: {
             // Don't print here to avoid print of print doom loop explosion.
             // CONSOLE_INFO("ObjectDictionary::SetBytes", "Forwarding %d byte message to network console.", buf_len);

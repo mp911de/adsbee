@@ -131,10 +131,9 @@ bool CC1312::Update() {
 
 #if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
         if (uint32_t(device_status.timestamp_ms - previous_device_timestamp) >= 0x80000000u)
-            adsbee.flarm_traffic.Clear();
+            adsbee.flarm_traffic.ResetSequence();
         uint64_t utc_ms;
         bool utc_valid = gnss->GetUTCUnixMs(utc_ms);
-        if (!utc_valid) adsbee.flarm_traffic.Clear();
         if (device_status.pending_raw_packets_len_bytes) {
             if (device_status.pending_raw_packets_len_bytes != sizeof(FlarmBatch)) return false;
             FlarmBatch batch;
@@ -174,9 +173,6 @@ bool CC1312::Update() {
 #endif
 
     } else {
-#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
-        adsbee.flarm_traffic.Clear();
-#endif
         if (!link_was_down) CONSOLE_ERROR("CC1312::Update", "Unable to read CC1312 status.");
         return false;
     }

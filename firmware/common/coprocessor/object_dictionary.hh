@@ -75,6 +75,7 @@ class ObjectDictionary {
         kAddrESP32TriggerAbort = 0x12,         // Debug only: trigger abort() on the ESP32 to test core dump.
         kAddrLEDBlink = 0x13,  // Force-blink the slave's LED: uint32_t duration_ms, bypasses led_enabled.
         kAddrFlarmPackets = 0x14,  // Local CC1312 -> RP2040 safety traffic only.
+        kAddrFlarmTargets = 0x15,  // Resolved RP2040 -> ESP32 target snapshot.
         kNumAddrs
     };
 

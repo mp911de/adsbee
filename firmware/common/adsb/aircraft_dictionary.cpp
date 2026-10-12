@@ -1571,6 +1571,14 @@ AircraftDictionary::AddressSourceRank AircraftDictionary::GetAddressSourceRank(c
     return kAddressSourceRankUnique;
 }
 
+uint32_t AircraftDictionary::GetSelfAssignedAddress(const AircraftEntry& entry) {
+    if (const RemoteIDAircraft* ac = std::get_if<RemoteIDAircraft>(&entry)) return ac->address & 0xFFFFFF;
+    if (const UATAircraft* ac = std::get_if<UATAircraft>(&entry);
+        ac && ac->GetAddressQualifier() == UATAircraft::kADSBTargetWithSelfAssignedTemporaryAddress)
+        return ac->icao_address & 0xFFFFFF;
+    return UINT32_MAX;
+}
+
 bool AircraftDictionary::IsPreferredReportForAddress(uint32_t uid, uint32_t timestamp_ms) const {
     auto itr = dict.find(uid);
     if (itr == dict.end()) {

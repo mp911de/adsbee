@@ -5,6 +5,7 @@ idf_component_register(
     SRC_DIRS
         "."
         "${MODULES_DIR}/opendroneid-core-c/libopendroneid"  # Broadcast Remote ID decoder (opendroneid.c).
+        "${COMMON_DIR}/flarm"
         "${COMMON_DIR}/adsb"
         "${COMMON_DIR}/adsb/nasa_cpr"
         "${COMMON_DIR}/adsb/nasa_cpr/airborne"
@@ -33,6 +34,7 @@ idf_component_register(
         "."
         "${COMMON_DIR}"
         "${MODULES_DIR}/opendroneid-core-c/libopendroneid"  # opendroneid.h for Remote ID decode.
+        "${COMMON_DIR}/flarm"
         "${COMMON_DIR}/adsb"
         "${COMMON_DIR}/adsb/nasa_cpr"
         "${COMMON_DIR}/comms"

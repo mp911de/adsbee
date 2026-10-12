@@ -276,7 +276,7 @@ bool CommsManager::UpdateReporting(const ReportSink* sinks, const SettingsManage
         // Activate rounds for protocols that currently have sinks.
         csbee_round_active_ = (num_csbee_sinks > 0);
 #if defined(ADSBEE_SUBGHZ_PROTOCOL_FLARM) && ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
-        adsbee.flarm_traffic.BeginReport();
+        adsbee.flarm_traffic.BeginReport(get_time_since_boot_ms());
 #endif
         mavlink1_round_active_ = (num_mavlink1_sinks > 0);
         mavlink2_round_active_ = (num_mavlink2_sinks > 0);
