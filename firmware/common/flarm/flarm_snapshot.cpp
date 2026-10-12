@@ -21,21 +21,35 @@ bool FlarmSnapshot::IsValid() const {
 }
 
 bool FlarmSnapshotReceiver::Write(const uint8_t* bytes, size_t length, size_t offset, uint32_t now_ms) {
-    if (!bytes || !length || offset > sizeof(staging_) || length > sizeof(staging_) - offset) {
+    if (!bytes || !length || offset > sizeof(snapshot_) || length > sizeof(snapshot_) - offset) {
         next_offset_ = 0;
         return false;
     }
     if (offset < next_offset_ && length <= next_offset_ - offset &&
-        memcmp(reinterpret_cast<const uint8_t*>(&staging_) + offset, bytes, length) == 0) return true;
+        memcmp(reinterpret_cast<const uint8_t*>(&snapshot_) + offset, bytes, length) == 0) return true;
     if (offset == 0) { next_offset_ = 0; started_ms_ = now_ms; }
     if (uint32_t(now_ms - started_ms_) >= 1000) { next_offset_ = 0; return false; }
     if (offset != next_offset_) { next_offset_ = 0; return false; }
-    memcpy(reinterpret_cast<uint8_t*>(&staging_) + offset, bytes, length);
+    PFB_MUTEX_LOCK(mutex_);
+    complete_ = false;
+    memcpy(reinterpret_cast<uint8_t*>(&snapshot_) + offset, bytes, length);
     next_offset_ += length;
-    if (next_offset_ == sizeof(staging_)) {
-        if (!staging_.IsValid()) { next_offset_ = 0; return false; }
-        published_ = staging_;
-        received_ms_ = started_ms_;
+    if (next_offset_ == sizeof(snapshot_)) {
+        complete_ = snapshot_.IsValid();
+        if (complete_) received_ms_ = started_ms_;
+        else next_offset_ = 0;
     }
-    return true;
+    PFB_MUTEX_UNLOCK(mutex_);
+    return next_offset_ != 0;
+}
+
+bool FlarmSnapshotReceiver::CopySnapshot(FlarmSnapshot& snapshot, uint32_t& received_ms) {
+    PFB_MUTEX_LOCK(mutex_);
+    bool changed = complete_ && snapshot.generation != snapshot_.generation;
+    if (changed) {
+        snapshot = snapshot_;
+        received_ms = received_ms_;
+    }
+    PFB_MUTEX_UNLOCK(mutex_);
+    return changed;
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "aircraft_dictionary.hh"
+#include <type_traits>
 #include "stdio.h"
 
 const uint16_t kAircraftJSONMessageStrMaxLen = 512;
@@ -525,15 +526,29 @@ inline int16_t WriteAircraftJSONRemoteIDAircraftStr(char buf[], const RemoteIDAi
  * @param[in] buf Scratch buffer for one array; each emitted array fits in buf_len bytes.
  * @param[in] buf_len Length of buf. Must hold at least one aircraft object plus the brackets.
  * @param[in] emit Called once per array.
+ * @param[in] flarm Optional FLARM state, appended after the dictionary entries it does not suppress.
  */
-template <typename EmitFn>
+template <typename EmitFn, typename FlarmSource = void>
 inline void WriteAircraftJSONLiveMapArrays(const AircraftDictionary& dictionary, uint32_t timestamp_ms, char buf[],
-                                           uint16_t buf_len, EmitFn emit) {
+                                           uint16_t buf_len, EmitFn emit, const FlarmSource* flarm = nullptr) {
     char json_buf[kAircraftJSONMessageStrMaxLen];
     uint16_t len_used = 0;
+    auto append = [&](const char* json, int len) {
+        if (len <= 0 || len + 2 > buf_len) return;
+        if (len_used > 0 && len_used + 1 + len + 1 > buf_len) {
+            buf[len_used++] = ']';
+            emit(buf, len_used);
+            len_used = 0;
+        }
+        char separator = len_used == 0 ? '[' : ',';
+        buf[len_used++] = separator;
+        memcpy(buf + len_used, json, len);
+        len_used += len;
+    };
     for (const auto& itr : dictionary.dict) {
-        if (!dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms)) {
-            continue;  // Another entry is reported for this ICAO address.
+        if (!dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms)) continue;
+        if constexpr (!std::is_void_v<FlarmSource>) {
+            if (flarm && flarm->SuppressesAircraft(itr.first, dictionary, timestamp_ms, UINT32_MAX)) continue;
         }
         int16_t len = -1;
         if (const ModeSAircraft* ac = std::get_if<ModeSAircraft>(&itr.second); ac) {
@@ -543,19 +558,13 @@ inline void WriteAircraftJSONLiveMapArrays(const AircraftDictionary& dictionary,
         } else if (const RemoteIDAircraft* ac = std::get_if<RemoteIDAircraft>(&itr.second); ac) {
             len = WriteAircraftJSONRemoteIDAircraftStr(json_buf, *ac);
         }
-        if (len <= 0 || len + 2 > buf_len) {
-            continue;
+        append(json_buf, len);
+    }
+    if constexpr (!std::is_void_v<FlarmSource>) {
+        if (flarm) {
+            for (size_t i = 0; i < flarm->Count(); ++i)
+                append(json_buf, flarm->WriteJSON(i, json_buf, sizeof(json_buf), timestamp_ms, dictionary));
         }
-        // "[" or "," before the object, "]" after the array.
-        if (len_used > 0 && len_used + 1 + len + 1 > buf_len) {
-            buf[len_used++] = ']';
-            emit(buf, len_used);
-            len_used = 0;
-        }
-        char separator = len_used == 0 ? '[' : ',';
-        buf[len_used++] = separator;
-        memcpy(buf + len_used, json_buf, len);
-        len_used += len;
     }
     if (len_used > 0) {
         buf[len_used++] = ']';

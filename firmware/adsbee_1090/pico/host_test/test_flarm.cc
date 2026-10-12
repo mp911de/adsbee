@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "flarm_traffic.hh"
-#include "flarm_gdl90.hh"
+#include "flarm_reports.hh"
+#include "aircraftjson_utils.hh"
 #include "buffer_utils.hh"
 #include <array>
 #include <cstring>
@@ -8,6 +9,19 @@
 #include <vector>
 
 namespace {
+FlarmSnapshot Snapshot(FlarmSnapshotReceiver& receiver) {
+    FlarmSnapshot snapshot;
+    uint32_t received_ms;
+    receiver.CopySnapshot(snapshot, received_ms);
+    return snapshot;
+}
+uint32_t ReceivedMs(FlarmSnapshotReceiver& receiver) {
+    FlarmSnapshot snapshot;
+    uint32_t received_ms = 0;
+    receiver.CopySnapshot(snapshot, received_ms);
+    return received_ms;
+}
+
 const uint8_t kPayload[] = {0xfb,0x18,0x0d,0x22,0,0,0xc0,0x03,0x42,0x1c,0x8b,0x57,
                           0xf5,0x77,0x38,0xc2,0x0f,0x29,0xe5,0x61,0x15,0x40,0xa9,0x52};
 FlarmRadioPacket Packet(uint32_t sequence = 1) {
@@ -290,9 +304,9 @@ TEST(Flarm, ReceivedFixUsesResolvedIdentityAndGDL90Mappings) {
     FlarmTraffic traffic; FampFixture f; f.urgency=2;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-    FlarmGDL90 output; output.Update(snapshot,1000);
+    FlarmReports output; output.Update(snapshot,1000);
     AircraftDictionary adsb; uint8_t bytes[64];
-    unsigned n=output.WriteReport(0,bytes,sizeof(bytes),1000,adsb);
+    unsigned n=output.WriteGDL90(0,bytes,sizeof(bytes),1000,adsb);
     ASSERT_GT(n,0u); EXPECT_EQ(bytes[0],0x7e); EXPECT_EQ(bytes[n-1],0x7e);
     auto b=Unframe(bytes,n); ASSERT_EQ(b.size(),30u);
     EXPECT_EQ(b[0],20); EXPECT_EQ(b[1],1);
@@ -301,9 +315,9 @@ TEST(Flarm, ReceivedFixUsesResolvedIdentityAndGDL90Mappings) {
     EXPECT_EQ(b[13],0x8b); EXPECT_EQ(b[17],64); // NIC8, NACp11, eastbound
     EXPECT_EQ(b[18],9); EXPECT_EQ(b[27],0x10); // glider, general emergency
     auto local=Reports(traffic,1000); ASSERT_EQ(local.size(),1u); EXPECT_EQ(local[0][1],"F09000");
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),1100,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),1100,adsb),0u);
     traffic.MakeSnapshot(snapshot,2000); output.Update(snapshot,2000);
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),2000,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),2000,adsb),0u);
 }
 
 TEST(Flarm, AircraftTypesTranslateWithoutInventingWeightClasses) {
@@ -312,8 +326,8 @@ TEST(Flarm, AircraftTypesTranslateWithoutInventingWeightClasses) {
         FlarmTraffic traffic; FampFixture f; f.aircraft=type;
         ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
         FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-        FlarmGDL90 output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[64];
-        unsigned n=output.WriteReport(0,bytes,sizeof(bytes),1000,adsb);
+        FlarmReports output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[64];
+        unsigned n=output.WriteGDL90(0,bytes,sizeof(bytes),1000,adsb);
         ASSERT_GT(n,0u); auto b=Unframe(bytes,n);
         EXPECT_EQ(b[18],type<20 ? expected[type] : 0) << type;
     }
@@ -326,18 +340,18 @@ TEST(FlarmSnapshot, PublishesCompleteSnapshotsAndAccountsForTransferAge) {
     FlarmSnapshotReceiver receiver;
     const auto* bytes=reinterpret_cast<const uint8_t*>(&snapshot);
     EXPECT_TRUE(receiver.Write(bytes,512,0,5000));
-    EXPECT_EQ(receiver.Snapshot().count,0);
+    EXPECT_EQ(Snapshot(receiver).count,0);
     EXPECT_FALSE(receiver.Write(bytes+1024,128,1024,5050));
-    EXPECT_EQ(receiver.Snapshot().count,0);
+    EXPECT_EQ(Snapshot(receiver).count,0);
     ASSERT_TRUE(receiver.Write(bytes,512,0,5100));
     for (size_t off=512; off<sizeof(snapshot); off+=512)
         ASSERT_TRUE(receiver.Write(bytes+off,std::min(size_t(512),sizeof(snapshot)-off),off,5200));
-    ASSERT_EQ(receiver.Snapshot().count,1);
-    EXPECT_EQ(receiver.Snapshot().targets[0].rx_age_ms,300u);
-    EXPECT_EQ(receiver.ReceivedMs(),5100u);
+    ASSERT_EQ(Snapshot(receiver).count,1);
+    EXPECT_EQ(Snapshot(receiver).targets[0].rx_age_ms,300u);
+    EXPECT_EQ(ReceivedMs(receiver),5100u);
     FlarmSnapshot empty; empty.generation=snapshot.generation+1;
     ASSERT_TRUE(receiver.Write(reinterpret_cast<uint8_t*>(&empty),sizeof(empty),0,6000));
-    EXPECT_EQ(receiver.Snapshot().count,0);
+    EXPECT_EQ(Snapshot(receiver).count,0);
 }
 
 TEST(FlarmSnapshot, RejectsMalformedRecordsWithoutReplacingPublishedState) {
@@ -345,6 +359,7 @@ TEST(FlarmSnapshot, RejectsMalformedRecordsWithoutReplacingPublishedState) {
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot good; traffic.MakeSnapshot(good,1000); FlarmSnapshotReceiver receiver;
     ASSERT_TRUE(receiver.Write(reinterpret_cast<uint8_t*>(&good),sizeof(good),0,100));
+    FlarmReports consumer; ASSERT_TRUE(consumer.Update(receiver)); ASSERT_EQ(consumer.Count(),1u);
     for (unsigned fault=0; fault<9; ++fault) {
         auto bad=good; bad.generation++;
         switch (fault) {
@@ -359,7 +374,8 @@ TEST(FlarmSnapshot, RejectsMalformedRecordsWithoutReplacingPublishedState) {
             case 8: bad.count=2; bad.targets[1]=bad.targets[0]; break;
         }
         EXPECT_FALSE(receiver.Write(reinterpret_cast<uint8_t*>(&bad),sizeof(bad),0,200)) << fault;
-        EXPECT_EQ(receiver.Snapshot().generation,good.generation) << fault;
+        EXPECT_FALSE(consumer.Update(receiver)) << fault;
+        EXPECT_EQ(consumer.Count(),1u) << fault;
     }
     auto old=good; old.generation++; old.targets[0].rx_age_ms=59999; old.targets[0].position_age_ms=66000;
     EXPECT_TRUE(receiver.Write(reinterpret_cast<uint8_t*>(&old),sizeof(old),0,250));
@@ -373,32 +389,32 @@ TEST(Flarm, DelayedSnapshotsDoNotTurnRetainedCoordinatesIntoUpdates) {
     FlarmTraffic traffic; FampFixture f;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-    FlarmGDL90 output; output.Update(snapshot,5000); AircraftDictionary adsb; uint8_t bytes[64];
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),11001,adsb),0u);
+    FlarmReports output; output.Update(snapshot,5000); AircraftDictionary adsb; uint8_t bytes[64];
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),11001,adsb),0u);
     traffic.MakeSnapshot(snapshot,21000); output.Update(snapshot,25000);
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),25000,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),25000,adsb),0u);
     f.utc+=21;
     ASSERT_TRUE(traffic.Ingest(f.Packet(2),22000,uint64_t(f.utc)*1000,true,0,0));
     traffic.MakeSnapshot(snapshot,22000); output.Update(snapshot,26000);
-    EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),26000,adsb),0u);
+    EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),26000,adsb),0u);
 }
 
 TEST(Flarm, ExplicitICAOUsesFreshestSourceWithADSBWinningFreshTies) {
     FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_ICAO; f.address=0xADF001;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),20000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,20000);
-    FlarmGDL90 output; output.Update(snapshot,20000); AircraftDictionary adsb;
+    FlarmReports output; output.Update(snapshot,20000); AircraftDictionary adsb;
     ModeSAircraft ac(f.address); ac.WriteBitFlag(ModeSAircraft::kBitFlagPositionValid,true);
     ac.last_position_update_ms=20000; ASSERT_NE(adsb.InsertAircraft(ac),nullptr);
     auto uid=Aircraft::ICAOToUID(f.address,Aircraft::kAircraftTypeModeS);
     uint8_t bytes[64];
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),20000,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),20000,adsb),0u);
     EXPECT_FALSE(output.SuppressesAircraft(uid,adsb,20000));
     adsb.GetAircraftPtr<ModeSAircraft>(f.address)->last_position_update_ms=1000;
-    EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),20000,adsb),0u);
+    EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),20000,adsb),0u);
     EXPECT_TRUE(output.SuppressesAircraft(uid,adsb,20000));
     EXPECT_FALSE(output.SuppressesAircraft(uid,adsb,81000));
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),20000,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),20000,adsb),0u);
     EXPECT_TRUE(output.SuppressesAircraft(uid,adsb,20000));  // Sent fixes still outrank stale ADS-B.
 }
 
@@ -406,14 +422,14 @@ TEST(Flarm, StaleFlarmFixNeitherSuppressesNorReports) {
     FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_ICAO; f.address=0xADF002;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),20000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,20000);
-    FlarmGDL90 output; output.Update(snapshot,20000); AircraftDictionary adsb;
+    FlarmReports output; output.Update(snapshot,20000); AircraftDictionary adsb;
     ModeSAircraft ac(f.address); ac.WriteBitFlag(ModeSAircraft::kBitFlagPositionValid,true);
     ac.last_position_update_ms=1000; ASSERT_NE(adsb.InsertAircraft(ac),nullptr);
     auto uid=Aircraft::ICAOToUID(f.address,Aircraft::kAircraftTypeModeS);
     uint8_t bytes[64];
     EXPECT_TRUE(output.SuppressesAircraft(uid,adsb,26000));
     EXPECT_FALSE(output.SuppressesAircraft(uid,adsb,26001));
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),26001,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),26001,adsb),0u);
 }
 
 TEST(Flarm, SyntheticIDsAvoidOtherExportedTypeOneAddresses) {
@@ -423,9 +439,9 @@ TEST(Flarm, SyntheticIDsAvoidOtherExportedTypeOneAddresses) {
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
     auto local=Reports(traffic,1000); ASSERT_EQ(local.size(),1u); EXPECT_EQ(local[0][1],"F09001");
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-    FlarmGDL90 output; output.Update(snapshot,1000);
+    FlarmReports output; output.Update(snapshot,1000);
     RemoteIDAircraft later(0xF09001); ASSERT_NE(adsb.InsertAircraft(later),nullptr);
-    uint8_t bytes[64]; EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),1000,adsb),0u);
+    uint8_t bytes[64]; EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),1000,adsb),0u);
     traffic.SetAddressReservations(adsb,1001);
     local=Reports(traffic,1001); ASSERT_EQ(local.size(),1u); EXPECT_EQ(local[0][1],"F09002");
 }
@@ -440,13 +456,14 @@ TEST(FlarmSnapshot, RetriesKeepOriginalAgeAndTimedOutTransfersStayPrivate) {
     ASSERT_TRUE(receiver.Write(bytes+512,512,512,120));
     ASSERT_TRUE(receiver.Write(bytes+512,512,512,130));
     ASSERT_TRUE(receiver.Write(bytes+1024,sizeof(snapshot)-1024,1024,140));
-    EXPECT_EQ(receiver.ReceivedMs(),100u);
+    EXPECT_EQ(ReceivedMs(receiver),100u);
     ASSERT_TRUE(receiver.Write(bytes+1024,sizeof(snapshot)-1024,1024,150));
-    EXPECT_EQ(receiver.ReceivedMs(),100u);
+    EXPECT_EQ(ReceivedMs(receiver),100u);
+    FlarmReports consumer; ASSERT_TRUE(consumer.Update(receiver));
     snapshot.generation++;
     ASSERT_TRUE(receiver.Write(bytes,512,0,1000));
     EXPECT_FALSE(receiver.Write(bytes+512,sizeof(snapshot)-512,512,5000));
-    EXPECT_EQ(receiver.Snapshot().generation,1u);
+    EXPECT_FALSE(consumer.Update(receiver)); EXPECT_EQ(consumer.Count(),1u);
 }
 
 TEST(Flarm, RadioResetHoldsReleasedIDsAndRestartedSequenceIsAccepted) {
@@ -463,9 +480,9 @@ TEST(Flarm, OwnshipICAOIsNotReportedAsTraffic) {
     FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_ICAO; f.address=0xADF001;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-    FlarmGDL90 output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[64];
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),1000,adsb,f.address),0u);
-    EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),1000,adsb,0xADF002),0u);
+    FlarmReports output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[64];
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),1000,adsb,f.address),0u);
+    EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),1000,adsb,0xADF002),0u);
 }
 
 TEST(Flarm, AmbiguousRotationAllocatesOnceAndCurrentAddressWins) {
@@ -480,8 +497,8 @@ TEST(Flarm, AmbiguousRotationAllocatesOnceAndCurrentAddressWins) {
     auto second=Reports(traffic,3100); ASSERT_EQ(second.size(),3u);
     for (size_t i=0; i<first.size(); ++i) EXPECT_EQ(first[i][1],second[i][1]);
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,3100);
-    FlarmGDL90 output; output.Update(snapshot,3100); AircraftDictionary adsb; uint8_t bytes[64];
-    for (size_t i=0; i<output.Count(); ++i) EXPECT_GT(output.WriteReport(i,bytes,sizeof(bytes),3100,adsb),0u);
+    FlarmReports output; output.Update(snapshot,3100); AircraftDictionary adsb; uint8_t bytes[64];
+    for (size_t i=0; i<output.Count(); ++i) EXPECT_GT(output.WriteGDL90(i,bytes,sizeof(bytes),3100,adsb),0u);
 }
 
 TEST(Flarm, PrivacyAndMissingPositionSuppressGDL90ButRemainInLocalReport) {
@@ -489,18 +506,18 @@ TEST(Flarm, PrivacyAndMissingPositionSuppressGDL90ButRemainInLocalReport) {
         FlarmTraffic traffic; FampFixture f; f.privacy=flags;
         ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
         FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
-        FlarmGDL90 output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[65];
+        FlarmReports output; output.Update(snapshot,1000); AircraftDictionary adsb; uint8_t bytes[65];
         memset(bytes,0xa5,sizeof(bytes));
-        EXPECT_EQ(output.WriteReport(0,bytes,63,1000,adsb),0u);
+        EXPECT_EQ(output.WriteGDL90(0,bytes,63,1000,adsb),0u);
         EXPECT_EQ(bytes[63],0xa5);
-        unsigned n=output.WriteReport(0,bytes,64,1000,adsb);
+        unsigned n=output.WriteGDL90(0,bytes,64,1000,adsb);
         EXPECT_EQ(n>0,flags==0); EXPECT_EQ(bytes[64],0xa5);
         auto local=Reports(traffic,1000); ASSERT_EQ(local.size(),1u);
         EXPECT_EQ(local[0][3],std::to_string(flags));
         f.utc++;
         ASSERT_TRUE(traffic.Ingest(f.Packet(2),2000,uint64_t(f.utc)*1000,false,0,0));
         traffic.MakeSnapshot(snapshot,2000); output.Update(snapshot,2000);
-        EXPECT_EQ(output.WriteReport(0,bytes,64,2000,adsb),0u);
+        EXPECT_EQ(output.WriteGDL90(0,bytes,64,2000,adsb),0u);
         local=Reports(traffic,2000); ASSERT_EQ(local.size(),1u); EXPECT_TRUE(local[0][5].empty());
     }
 }
@@ -509,13 +526,13 @@ TEST(Flarm, NewStationaryFixReportsOnceAcrossMillisecondWrap) {
     FlarmTraffic traffic; FampFixture f;
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),UINT32_MAX-499,uint64_t(f.utc)*1000,true,0,0));
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,UINT32_MAX-499);
-    FlarmGDL90 output; output.Update(snapshot,UINT32_MAX-499); AircraftDictionary adsb; uint8_t bytes[64];
-    ASSERT_GT(output.WriteReport(0,bytes,sizeof(bytes),100,adsb),0u);
-    EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),200,adsb),0u);
+    FlarmReports output; output.Update(snapshot,UINT32_MAX-499); AircraftDictionary adsb; uint8_t bytes[64];
+    ASSERT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),100,adsb),0u);
+    EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),200,adsb),0u);
     f.utc++;
     ASSERT_TRUE(traffic.Ingest(f.Packet(2),500,uint64_t(f.utc)*1000,true,0,0));
     traffic.MakeSnapshot(snapshot,500); output.Update(snapshot,500);
-    EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),500,adsb),0u);
+    EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),500,adsb),0u);
 }
 
 TEST(Flarm, CoprocessorRestartPreservesIdentityAcrossAdvertisedRotation) {
@@ -527,8 +544,8 @@ TEST(Flarm, CoprocessorRestartPreservesIdentityAcrossAdvertisedRotation) {
     ASSERT_TRUE(traffic.Ingest(f.Packet(1),3000,uint64_t(f.utc)*1000,true,0,0));
     auto after=Reports(traffic,3000); ASSERT_EQ(after.size(),1u); EXPECT_EQ(before[0][1],after[0][1]);
     FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,3000);
-    FlarmGDL90 output; output.Update(snapshot,3000); AircraftDictionary adsb; uint8_t bytes[64];
-    EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),3000,adsb),0u);
+    FlarmReports output; output.Update(snapshot,3000); AircraftDictionary adsb; uint8_t bytes[64];
+    EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),3000,adsb),0u);
 }
 
 TEST(Flarm, EmissionBudgetIncludesBothReportingDelays) {
@@ -536,21 +553,21 @@ TEST(Flarm, EmissionBudgetIncludesBothReportingDelays) {
         FlarmTraffic traffic; FampFixture f;
         ASSERT_TRUE(traffic.Ingest(f.Packet(1),10000,uint64_t(f.utc)*1000+age,true,0,0));
         FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,10990);
-        FlarmGDL90 output; output.Update(snapshot,10990);
+        FlarmReports output; output.Update(snapshot,10990);
         AircraftDictionary adsb; uint8_t bytes[64];
         EXPECT_EQ(Reports(traffic,11980).size(),1u);
-        EXPECT_GT(output.WriteReport(0,bytes,sizeof(bytes),11980,adsb),0u) << age;
-        EXPECT_EQ(output.WriteReport(0,bytes,sizeof(bytes),11980,adsb),0u) << age;
-        FlarmGDL90 late; late.Update(snapshot,10990);
-        EXPECT_GT(late.WriteReport(0,bytes,sizeof(bytes),16000-age,adsb),0u) << age;
-        EXPECT_EQ(late.WriteReport(0,bytes,sizeof(bytes),16000-age,adsb),0u) << age;
-        FlarmGDL90 delayed; delayed.Update(snapshot,10990);
-        EXPECT_EQ(delayed.WriteReport(0,bytes,sizeof(bytes),16001-age,adsb),0u) << age;
+        EXPECT_GT(output.WriteGDL90(0,bytes,sizeof(bytes),11980,adsb),0u) << age;
+        EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),11980,adsb),0u) << age;
+        FlarmReports late; late.Update(snapshot,10990);
+        EXPECT_GT(late.WriteGDL90(0,bytes,sizeof(bytes),16000-age,adsb),0u) << age;
+        EXPECT_EQ(late.WriteGDL90(0,bytes,sizeof(bytes),16000-age,adsb),0u) << age;
+        FlarmReports delayed; delayed.Update(snapshot,10990);
+        EXPECT_EQ(delayed.WriteGDL90(0,bytes,sizeof(bytes),16001-age,adsb),0u) << age;
     }
 }
 
 TEST(Flarm, ContinuousReceptionSurvivesFreeRunningReportingPhases) {
-    FlarmTraffic traffic; FampFixture f; FlarmGDL90 output; AircraftDictionary adsb;
+    FlarmTraffic traffic; FampFixture f; FlarmReports output; AircraftDictionary adsb;
     uint32_t next_snapshot=2500, next_report=3001, sequence=0, reports=0, emitted=0;
     const uint32_t epoch=f.utc;
     for (uint32_t now=2000; now<53000; ++now) {
@@ -565,10 +582,95 @@ TEST(Flarm, ContinuousReceptionSurvivesFreeRunningReportingPhases) {
         if (now==next_report) {
             uint8_t bytes[64]; ++reports;
             EXPECT_EQ(Reports(traffic,now).size(),1u);
-            if (output.WriteReport(0,bytes,sizeof(bytes),now,adsb)) ++emitted;
+            if (output.WriteGDL90(0,bytes,sizeof(bytes),now,adsb)) ++emitted;
             next_report+=1010;
         }
     }
     EXPECT_EQ(reports,50u);
     EXPECT_EQ(emitted,reports);
+}
+
+TEST(Flarm, MapRepeatsRetainedStateWithOriginalAgesAndGeometricAltitude) {
+    FlarmTraffic traffic; FampFixture f;
+    ASSERT_TRUE(traffic.Ingest(f.Packet(1),1000,uint64_t(f.utc)*1000,true,0,0));
+    FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1500);
+    FlarmReports output; output.Update(snapshot,5000); AircraftDictionary adsb; char json[512];
+    ASSERT_GT(output.WriteJSON(0,json,sizeof(json),20500,adsb),0);
+    std::string text(json);
+    EXPECT_NE(text.find("\"hex\":\"~f09000\""),std::string::npos);
+    EXPECT_NE(text.find("\"type\":\"flarm\""),std::string::npos);
+    EXPECT_NE(text.find("\"alt_geom\":3280.8"),std::string::npos);
+    EXPECT_EQ(text.find("alt_baro"),std::string::npos);
+    EXPECT_NE(text.find("\"seen_pos\":16.000"),std::string::npos);
+    EXPECT_NE(text.find("\"seen\":16.000"),std::string::npos);
+    EXPECT_GT(output.WriteJSON(0,json,sizeof(json),20500,adsb),0);
+    uint8_t bytes[64]; EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),20500,adsb),0);
+    EXPECT_GT(output.WriteJSON(0,json,sizeof(json),64499,adsb),0);
+    EXPECT_EQ(output.WriteJSON(0,json,sizeof(json),64500,adsb),0);
+    char small[12]; memset(small,'!',sizeof(small));
+    EXPECT_EQ(output.WriteJSON(0,small,11,20500,adsb),-1);
+    EXPECT_EQ(small[0],0); EXPECT_EQ(small[11],'!');
+}
+
+TEST(Flarm, MapBatchesFilterPrivateTargetsAndCompleteEmptySnapshots) {
+    FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_FLARM;
+    for (unsigned i=0; i<64; ++i) {
+        f.address=i+1; f.privacy=i%4;
+        ASSERT_TRUE(traffic.Ingest(f.Packet(i+1),1000,uint64_t(f.utc)*1000,true,0,0));
+    }
+    FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,1000);
+    FlarmReports output; output.Update(snapshot,1000); AircraftDictionary adsb;
+    char buf[513]; buf[512]='!'; std::vector<std::string> arrays;
+    auto emit=[&](const char* p,uint16_t n) { arrays.emplace_back(p,n); };
+    WriteAircraftJSONLiveMapArrays(adsb,1000,buf,512,emit,&output);
+    size_t records=0;
+    for (const auto& a : arrays) {
+        EXPECT_LE(a.size(),512u); EXPECT_EQ(a.front(),'['); EXPECT_EQ(a.back(),']');
+        for (size_t pos=0; (pos=a.find("\"type\":\"flarm\"",pos))!=std::string::npos; ++pos) ++records;
+    }
+    EXPECT_EQ(records,16u); EXPECT_EQ(buf[512],'!');
+    arrays.clear();
+    WriteAircraftJSONLiveMapArrays(adsb,61000,buf,512,emit,&output);
+    EXPECT_TRUE(arrays.empty());
+}
+
+TEST(Flarm, MapMergesSuppressedModeSFieldsIntoFlarmRecord) {
+    FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_ICAO; f.address=0xADF003;
+    ASSERT_TRUE(traffic.Ingest(f.Packet(1),20000,uint64_t(f.utc)*1000,true,0,0));
+    FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,20000);
+    FlarmReports output; output.Update(snapshot,20000); AircraftDictionary adsb;
+    ModeSAircraft ac(f.address); strcpy(ac.callsign,"DKABC"); ac.squawk=7000;
+    ac.WriteBitFlag(ModeSAircraft::kBitFlagBaroAltitudeValid,true); ac.baro_altitude_ft=3500;
+    ac.emitter_category=ADSBTypes::kEmitterCategoryGliderSailplane;
+    ASSERT_NE(adsb.InsertAircraft(ac),nullptr);
+    char buf[1024]; std::string text;
+    auto emit=[&](const char* p,uint16_t n) { text.append(p,n); };
+    WriteAircraftJSONLiveMapArrays(adsb,21000,buf,sizeof(buf),emit,&output);
+    EXPECT_EQ(text.find("\"link\":\"1090\""),std::string::npos) << text;
+    EXPECT_NE(text.find("\"type\":\"flarm\""),std::string::npos) << text;
+    EXPECT_NE(text.find("\"flight\":\"DKABC\""),std::string::npos) << text;
+    EXPECT_NE(text.find("\"squawk\":\"7000\""),std::string::npos) << text;
+    EXPECT_NE(text.find("\"alt_baro\":3500"),std::string::npos) << text;
+    EXPECT_NE(text.find("\"category\":\"B1\""),std::string::npos) << text;
+    EXPECT_EQ(text.find("on_ground"),std::string::npos) << text;
+    EXPECT_EQ(text.back(),']');
+}
+
+TEST(Flarm, MapChoosesOneICAOSourceIndependentlyOfGDL90EmissionAge) {
+    FlarmTraffic traffic; FampFixture f; f.type=FAMP_ADDR_ICAO; f.address=0xADF001;
+    ASSERT_TRUE(traffic.Ingest(f.Packet(1),20000,uint64_t(f.utc)*1000,true,0,0));
+    FlarmSnapshot snapshot; traffic.MakeSnapshot(snapshot,20000);
+    FlarmReports output; output.Update(snapshot,20000); AircraftDictionary adsb;
+    ModeSAircraft ac(f.address); ac.WriteBitFlag(ModeSAircraft::kBitFlagPositionValid,true);
+    ac.last_position_update_ms=20000; ASSERT_NE(adsb.InsertAircraft(ac),nullptr);
+    char buf[1024]; std::string text;
+    auto emit=[&](const char* p,uint16_t n) { text.append(p,n); };
+    WriteAircraftJSONLiveMapArrays(adsb,28000,buf,sizeof(buf),emit,&output);
+    EXPECT_EQ(text.find("\"type\":\"flarm\""),std::string::npos);
+    EXPECT_NE(text.find("\"link\":\"1090\""),std::string::npos);
+    adsb.GetAircraftPtr<ModeSAircraft>(f.address)->last_position_update_ms=1000;
+    text.clear(); WriteAircraftJSONLiveMapArrays(adsb,28000,buf,sizeof(buf),emit,&output);
+    EXPECT_NE(text.find("\"hex\":\"adf001\""),std::string::npos);
+    EXPECT_NE(text.find("\"type\":\"flarm\""),std::string::npos);
+    EXPECT_EQ(text.find("\"link\""),std::string::npos);
 }

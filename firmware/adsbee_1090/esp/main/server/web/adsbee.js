@@ -1083,17 +1083,24 @@ const TRAFFIC_SOURCES = {
     adsr: { label: 'ADS-R', stroke: '#e07000', dash: '4,2' },
     tisb: { label: 'TIS-B', stroke: '#7b2fbe', dash: '2,2' },
     rid: { label: 'Remote ID', stroke: '#c026d3', dash: '' },
+    flarm: { label: 'FLARM', stroke: '#16876b', dash: '' },
 };
+const kFlarmAircraftTypes = ['Unknown', 'Glider', 'Tow plane', 'Helicopter', 'Skydiver', 'Drop plane',
+    'Hang glider', 'Paraglider', 'Powered', 'Jet', 'UFO', 'Balloon', 'Airship', 'UAV', 'Reserved', 'Static obstacle'];
 // Positions older than this (seconds, from "seen_pos") are drawn faded.
 const kStalePositionS = 15;
 
 function acSource(ac) {
     const type = ac.type ?? '';
     if (type === 'remote_id') return 'rid';
+    if (type === 'flarm') return 'flarm';
     if (type.startsWith('tisb')) return 'tisb';
     if (type.startsWith('adsr')) return 'adsr';
     return ac.link === 'uat' ? 'adsb_uat' : 'adsb_1090';  // Firmware without "link" only sent 1090 as direct ADS-B.
 }
+
+// Pressure altitude when reported, else geometric (FLARM, Remote ID, baro-less ADS-B).
+const acAltitude = ac => ac.alt_baro ?? ac.alt_geom ?? null;
 
 class AircraftStore {
     constructor() {
@@ -1111,25 +1118,28 @@ class AircraftStore {
         if (prev.src && prev.src !== src) prev = {};  // Don't mix fields from two sources; the trail carries over.
         this.aircraft.set(key, { ...prev, ...ac, key, src, srcLabel: TRAFFIC_SOURCES[src].label });
         this.lastSeen.set(key, Date.now());
-        if (ac.lat != null && ac.lon != null) {
+        const newFix = src !== 'flarm' || prev.fix_utc == null || ac.fix_utc > prev.fix_utc;
+        if (newFix && ac.lat != null && ac.lon != null) {
             const t = this.trails.get(key) || [];
-            t.push({ lat: ac.lat, lon: ac.lon, alt: ac.alt_baro ?? null });
+            t.push({ lat: ac.lat, lon: ac.lon, alt: acAltitude(ac) });
             if (t.length > kMaxTrailPoints) t.shift();
             this.trails.set(key, t);
             this.trailRev.set(key, (this.trailRev.get(key) ?? 0) + 1);
         }
     }
 
-    // Remove aircraft not heard from in the last 5 seconds.
+    remove(key) {
+        this.aircraft.delete(key);
+        this.trails.delete(key);
+        this.trailRev.delete(key);
+        this.lastSeen.delete(key);
+    }
+
     sweep() {
-        const cutoff = Date.now() - 5000;
-        for (const key of this.aircraft.keys()) {
-            if ((this.lastSeen.get(key) ?? 0) < cutoff) {
-                this.aircraft.delete(key);
-                this.trails.delete(key);
-                this.trailRev.delete(key);
-                this.lastSeen.delete(key);
-            }
+        const now = Date.now();
+        for (const [key, ac] of this.aircraft) {
+            const elapsed = now - (this.lastSeen.get(key) ?? 0);
+            if (elapsed > 5000) this.remove(key);
         }
     }
 
@@ -1140,7 +1150,9 @@ class AircraftStore {
         this.lastSeen.clear();
     }
 
-    all() { return [...this.aircraft.values()]; }
+    all() {
+        return [...this.aircraft.values()];
+    }
 }
 
 // ─── LiveMap ─────────────────────────────────────────────────────────────────
@@ -1354,12 +1366,13 @@ class LiveMap {
     update() {
         if (!this._ready) return;
         const live = new Set();
+        const aircraft = this.store.all();
 
-        for (const ac of this.store.all()) {
+        for (const ac of aircraft) {
             if (ac.lat == null || ac.lon == null) continue;
             live.add(ac.key);
             const isDrone = ac.type === 'remote_id';
-            const color = acAltColor(ac.alt_baro ?? ac.alt_geom);
+            const color = acAltColor(acAltitude(ac));
             const isGround = !!ac.on_ground;
             const isSel = ac.key === this.selectedHex;
             const isStale = ac.seen_pos != null && ac.seen_pos > kStalePositionS;
@@ -1387,7 +1400,7 @@ class LiveMap {
         // Refresh trail and info panel for selected aircraft each tick
         if (this.selectedHex && this.store.aircraft.has(this.selectedHex)) {
             this._drawTrail(this.selectedHex);
-            const ac = this.store.aircraft.get(this.selectedHex);
+            const ac = aircraft.find(ac => ac.key === this.selectedHex);
             if (ac) this._showInfoPanel(ac);
         }
 
@@ -1475,7 +1488,7 @@ class LiveMap {
             ['category', 'Category', v => v],
             ['on_ground', 'On ground', v => v ? 'Yes' : null],
             ['alt_baro', 'Alt baro', v => v.toLocaleString() + ' ft'],
-            ['alt_geom', 'Alt geom', v => v.toLocaleString() + ' ft'],
+            ['alt_geom', ac.src === 'flarm' ? 'Altitude (HAE)' : 'Alt geom', v => v.toLocaleString() + ' ft'],
             ['gs', 'Speed', v => Math.round(v) + ' kt'],
             ['track', 'Track', v => v.toFixed(1) + '°'],
             ['mag_heading', 'Mag heading', v => v.toFixed(1) + '°'],
@@ -1498,6 +1511,12 @@ class LiveMap {
             ['alert', 'Alert', v => v ? 'Yes' : null],
             ['spi', 'SPI (Ident)', v => v ? 'Yes' : null],
             ['emergency', 'Emergency', v => v],
+            ['flarm_type', 'FLARM aircraft type', v => kFlarmAircraftTypes[v] ?? String(v)],
+            ['flarm_movement', 'Movement', v => ['Unknown', 'Ground', 'Flying', 'Circling'][v]],
+            ['flarm_urgency', 'Urgency', v => ['Normal', 'High', 'Pan-Pan', 'Mayday'][v]],
+            ['flarm_turn', 'Turn rate', v => v.toFixed(2) + ' °/s'],
+            ['flarm_version', 'FAMP version', v => String(v)],
+            ['seen', 'Reception age', v => v.toFixed(1) + ' s'],
             // Broadcast Remote ID (drone) fields.
             ['rid_uas_id', 'UAS ID', v => v.trim() || null],
             ['rid_id_type', 'UAS ID type', v => RID_ID_TYPE_STRINGS[v] || String(v)],
@@ -1577,8 +1596,8 @@ class AircraftTable {
         const dir = this.sortDir === 'asc' ? 1 : -1;
         const numeric = kNumericSortKeys.has(key);
         return this.store.all().sort((a, b) => {
-            const av = a[key] ?? null;
-            const bv = b[key] ?? null;
+            const av = (key === 'alt_baro' ? acAltitude(a) : a[key]) ?? null;
+            const bv = (key === 'alt_baro' ? acAltitude(b) : b[key]) ?? null;
             if (av === null && bv === null) return 0;
             if (av === null) return 1;   // nulls last
             if (bv === null) return -1;
@@ -1600,13 +1619,14 @@ class AircraftTable {
             const cs = (ac.flight || '').trim();
             const source = ac.srcLabel ?? '';
             const sqwk = ac.squawk ?? '';
-            const alt = ac.alt_baro != null ? ac.alt_baro.toLocaleString() : '';
+            const altitude = acAltitude(ac);
+            const alt = altitude != null ? altitude.toLocaleString() + (ac.alt_baro == null ? ' geom' : '') : '';
             const gs = ac.gs != null ? Math.round(ac.gs) : '';
             const hdg = ac.track != null ? Math.round(ac.track) + '°' : '';
             const lat = ac.lat != null ? ac.lat.toFixed(4) : '';
             const lon = ac.lon != null ? ac.lon.toFixed(4) : '';
             const rssi = ac.rssi != null ? ac.rssi.toFixed(1) : '';
-            const color = acAltColor(ac.alt_baro);
+            const color = acAltColor(altitude);
 
             if (rows.has(ac.key)) {
                 const r = rows.get(ac.key);
@@ -1656,5 +1676,5 @@ class AircraftTable {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { isOtherTextEntry, whereplaneMapUrl };
+    module.exports = { isOtherTextEntry, whereplaneMapUrl, AircraftStore, acSource, AircraftTable };
 }

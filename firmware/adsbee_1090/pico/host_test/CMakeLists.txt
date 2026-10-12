@@ -91,6 +91,13 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
     )
 endforeach()
 
+# Shared JSON must compile for products with no FLARM include path.
+add_library(aircraftjson_header_check OBJECT test_aircraftjson_header.cc)
+get_target_property(json_header_includes host_test INCLUDE_DIRECTORIES)
+list(FILTER json_header_includes EXCLUDE REGEX "/flarm(/|$)")
+target_include_directories(aircraftjson_header_check PRIVATE ${json_header_includes})
+target_compile_definitions(aircraftjson_header_check PRIVATE ON_HOST)
+
 add_subdirectory(uat)
 
 # Make test runnable with "make test".
@@ -98,6 +105,7 @@ add_test(NAME build_profiles COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/p
 
 include(GoogleTest)
 foreach(_test_tgt IN ITEMS host_test host_test_fpu)
+    add_dependencies(${_test_tgt} aircraftjson_header_check)
     gtest_discover_tests(${_test_tgt}
         TEST_PREFIX "${_test_tgt}."
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -106,3 +114,14 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
             DISCOVERY_TIMEOUT 10
     )
 endforeach()
+# Compile both translation units with the same real host mutex layout.
+add_executable(flarm_snapshot_concurrency_test test_flarm_snapshot_concurrency.cc
+    ${ADSBEE_COMMON_DIR}/flarm/flarm_snapshot.cpp)
+target_include_directories(flarm_snapshot_concurrency_test PRIVATE
+    ${ADSBEE_COMMON_DIR}/flarm ${ADSBEE_COMMON_DIR}/utils ${ADSBEE_MODULES_DIR}/googletest/googletest/include)
+target_compile_options(flarm_snapshot_concurrency_test PRIVATE
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/mocks/flarm_test_mutex.hh)
+target_link_libraries(flarm_snapshot_concurrency_test PRIVATE libgtest Threads::Threads)
+add_dependencies(host_test flarm_snapshot_concurrency_test)
+add_dependencies(host_test_fpu flarm_snapshot_concurrency_test)
+gtest_discover_tests(flarm_snapshot_concurrency_test TEST_PREFIX "flarm_concurrency.")

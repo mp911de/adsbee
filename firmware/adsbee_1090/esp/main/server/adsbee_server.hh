@@ -3,7 +3,7 @@
 #include "aircraft_dictionary.hh"
 #include "composite_array.hh"
 #include "data_structures.hh"
-#include "flarm_gdl90.hh"
+#include "flarm_reports.hh"
 #include "freertos/semphr.h"
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
@@ -45,7 +45,6 @@ class ADSBeeServer {
      * Constructor.
      */
     ADSBeeServer() {
-        flarm_mutex_ = xSemaphoreCreateMutex();
         rp2040_aircraft_dictionary_metrics_queue = xQueueCreate(1, sizeof(AircraftDictionary::Metrics));
         network_console_tx_buf_ = xStreamBufferCreate(kNetworkConsoleTxBufLenBytes, 1);
         raw_packets_buf_ = (uint8_t*)heap_caps_malloc(CompositeArray::RawPackets::kMaxLenBytes, MALLOC_CAP_8BIT);
@@ -55,7 +54,6 @@ class ADSBeeServer {
      * Destructor.
      */
     ~ADSBeeServer() {
-        if (flarm_mutex_) vSemaphoreDelete(flarm_mutex_);
         vQueueDelete(rp2040_aircraft_dictionary_metrics_queue);
         if (raw_packets_buf_) {
             heap_caps_free(raw_packets_buf_);
@@ -125,9 +123,8 @@ class ADSBeeServer {
     AircraftDictionary::Metrics rp2040_aircraft_dictionary_metrics;
 
    private:
-    SemaphoreHandle_t flarm_mutex_ = nullptr;
     FlarmSnapshotReceiver flarm_receiver_;
-    FlarmGDL90 flarm_gdl90_;
+    FlarmReports flarm_reports_;
     struct WSClientInfo {
         bool in_use = false;
         int client_fd = 0;

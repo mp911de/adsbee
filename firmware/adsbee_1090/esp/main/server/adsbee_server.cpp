@@ -162,10 +162,8 @@ bool ADSBeeServer::Init() {
 }
 
 bool ADSBeeServer::ReceiveFlarmTargets(const uint8_t* bytes, size_t length, size_t offset) {
-    if (!flarm_mutex_ || xSemaphoreTake(flarm_mutex_, 0) != pdTRUE) return false;
     uint32_t now_ms = get_time_since_boot_ms();
     bool ok = flarm_receiver_.Write(bytes, length, offset, now_ms);
-    xSemaphoreGive(flarm_mutex_);
     static uint32_t last_error_ms = 0;
     if (!ok && now_ms - last_error_ms >= 10000) {
         last_error_ms = now_ms;
@@ -176,10 +174,7 @@ bool ADSBeeServer::ReceiveFlarmTargets(const uint8_t* bytes, size_t length, size
 }
 
 bool ADSBeeServer::Update() {
-    if (flarm_mutex_ && xSemaphoreTake(flarm_mutex_, 0) == pdTRUE) {
-        flarm_gdl90_.Update(flarm_receiver_.Snapshot(), flarm_receiver_.ReceivedMs());
-        xSemaphoreGive(flarm_mutex_);
-    }
+    flarm_reports_.Update(flarm_receiver_);
     bool ret = true;
     // Do NOT call pico.Update() from here since that's already taken care of by the SPIReceiveTask.
     // Update the LED here so it has better time resolution than it would in the SPI task, which blocks frequently.
@@ -416,7 +411,7 @@ bool ADSBeeServer::ReportGDL90() {
     for (auto& itr : aircraft_dictionary.dict) {
         aircraft_index++;
         if (!aircraft_dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms) ||
-            flarm_gdl90_.SuppressesAircraft(itr.first, aircraft_dictionary, timestamp_ms)) {
+            flarm_reports_.SuppressesAircraft(itr.first, aircraft_dictionary, timestamp_ms)) {
             continue;  // Another entry (e.g. the aircraft's own ADS-B) is reported for this ICAO address.
         }
 
@@ -471,8 +466,8 @@ bool ADSBeeServer::ReportGDL90() {
     }
 
     // Local FLARM targets share the aircraft message stream.
-    for (size_t i = 0; i < flarm_gdl90_.Count(); ++i) {
-        aircraft_msg_buf_len = flarm_gdl90_.WriteReport(i, aircraft_msg_buf, sizeof(aircraft_msg_buf), timestamp_ms,
+    for (size_t i = 0; i < flarm_reports_.Count(); ++i) {
+        aircraft_msg_buf_len = flarm_reports_.WriteGDL90(i, aircraft_msg_buf, sizeof(aircraft_msg_buf), timestamp_ms,
                                                         aircraft_dictionary, ownship_data.participant_address);
         if (!aircraft_msg_buf_len) continue;
         if (message.len + aircraft_msg_buf_len > CommsManager::NetworkMessage::kMaxLenBytes) {
@@ -1004,5 +999,6 @@ void ADSBeeServer::SendAircraftJSONMessages() {
     // doing that outrank the SPI receive task, which then missed RP2040 handshakes until the RP2040 reset the board.
     char batch_buf[WebSocketServer::kWebSocketMessageMaxLen];
     WriteAircraftJSONLiveMapArrays(aircraft_dictionary, get_time_since_boot_ms(), batch_buf, sizeof(batch_buf),
-                                   [this](const char* buf, uint16_t len) { network_aircraft.BroadcastMessage(buf, len); });
+                                   [this](const char* buf, uint16_t len) { network_aircraft.BroadcastMessage(buf, len); },
+                                   &flarm_reports_);
 }
