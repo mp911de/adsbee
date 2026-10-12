@@ -1,6 +1,9 @@
 #pragma once
 
 #include "gnss_receiver.hh"
+#ifdef AIRGREP
+#include "../../../profiles/airgrep_gnss.hh"
+#endif
 #include "ublox_max_m10_defaults.hh"  // For kUbloxConfigDefaults[] (auto-generated).
 
 /**
@@ -15,35 +18,19 @@
  */
 class UbloxMAXM10 : public GNSSReceiver {
    public:
-    // M10 factory default UART1 baud rate (per the interface description configuration defaults:
-    // CFG-UART1-BAUDRATE = 38400). The full default table is written during init.
-    static constexpr uint32_t kDefaultBaudrate = 38400;
-
     // Settle floor after power-on before we start probing. u-blox does not publish a fixed
-    // Vcc-to-UART-ready time for the M10 (only TTFF, which is fix time, not UART readiness) and
-    // recommends polling UBX-MON-VER until it answers; this is a conservative floor on top of that
-    // poll-until-ready retry (see ProbeLiveness / kProbeAttempts).
-    // Max time to wait for a single UBX response (ACK/NAK after a VALSET, or a VALGET reply). Bounds
-    // exactly one outstanding transaction: a UBX frame is <10 ms on the wire at 38400 baud and the
-    // module ACKs in single/low-tens of ms; the only slack needed is for the scanner to skip past the
-    // interleaved 1 Hz GGA/RMC NMEA. A NAK matches immediately (wildcard ACK-class match in
-    // WaitForAck), so this timeout only elapses on a genuinely absent/unresponsive reply.
+    // Vcc-to-UART-ready time for the M10 (only TTFF, which is fix time, not UART readiness)
     static constexpr uint32_t kAckTimeoutMs = 150;
 
     // Liveness probe (UBX-MON-VER poll) timeout, per attempt. A u-blox-reported data point shows some
     // modules are still not ready to answer at 300 ms after startup, so allow a bit more headroom.
     static constexpr uint32_t kProbeTimeoutMs = 500;
 
-    // Number of UBX-MON-VER poll attempts before declaring the module absent. Implements the
-    // recommended "poll until ready" pattern so a module still finishing its cold-start on the first
-    // poll is still detected, rather than failing a single-shot probe. The watchdog is poked between
-    // attempts. Total worst case if absent: kProbeAttempts * kProbeTimeoutMs.
-    static constexpr uint32_t kProbeAttempts = 5;
+    // M10 factory default, used to recover a module that does not answer at the configured rate.
+    static constexpr uint32_t kSafeBaudrate = 9600;
+    static constexpr uint32_t kBaudrateSwitchSettleMs = 50;
 
-    // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults). Bounds the ~371-key
-    // read-modify-write so a module that answers the probe but then stops responding cannot stall init
-    // past the ~10 s watchdog window. Sized with margin below it; the per-key watchdog poke keeps the
-    // watchdog fed within the budget, and exceeding it aborts the pass and marks the receiver unhealthy.
+    // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults). 
     static constexpr uint32_t kInitConfigBudgetMs = 10000;
 
     // UBX protocol constants.
@@ -136,6 +123,15 @@ class UbloxMAXM10 : public GNSSReceiver {
     void DebugDumpModuleStatus() override;
 
    private:
+#ifdef AIRGREP
+    static constexpr uint8_t kMessageBatchSize = 32;
+    static constexpr uint32_t kMessageReplyTimeoutMs = 500;
+    static constexpr uint32_t kBootstrapReplyTimeoutMs = 1500;
+    bool ConfigureAirgrepMessages(uint8_t layers);
+    bool ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint8_t layers,
+                           uint32_t timeout_ms = kMessageReplyTimeoutMs);
+    bool VerifyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint32_t timeout_ms);
+#endif
     // Build and transmit a raw UBX frame (sync + class/id + length + payload + checksum).
     void SendUbxFrame(uint8_t msg_class, uint8_t msg_id, const uint8_t* payload, uint16_t payload_len);
 
@@ -146,7 +142,7 @@ class UbloxMAXM10 : public GNSSReceiver {
     // @param[out] is_ack Optional; for ACK/NAK frames, set true on ACK-ACK and false on ACK-NAK.
     // @retval True if a matching frame with a valid checksum arrived before the timeout, false otherwise.
     bool ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_t timeout_ms, uint8_t* out_payload,
-                           uint16_t out_cap, uint16_t* out_len, bool* is_ack);
+                           uint16_t out_cap, uint16_t* out_len, bool* is_ack, bool* config_nak = nullptr);
 
     // Thin wrapper: wait for a matching UBX frame without capturing its payload.
     bool WaitForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_t timeout_ms, bool* is_ack = nullptr);
@@ -155,12 +151,13 @@ class UbloxMAXM10 : public GNSSReceiver {
     // @retval True on ACK-ACK, false on ACK-NAK or timeout.
     bool WaitForAck(uint8_t acked_class, uint8_t acked_id);
 
-    // Quick, bounded check that the module is present and talking UBX: poll UBX-MON-VER up to
-    // kProbeAttempts times (kProbeTimeoutMs each, watchdog poked between attempts), returning as soon
-    // as it replies. Implements u-blox's recommended "poll until ready" readiness detection and gates
-    // the bulk config pass so a missing module never stalls boot.
-    // @retval True if the module replied within kProbeAttempts attempts.
-    bool ProbeLiveness();
+    // Poll UBX-MON-VER once at the current host rate.
+    bool Probe();
+    void SetHostBaudrate(uint32_t baudrate);
+
+    // Find the module at the configured rate, else at kSafeBaudrate and move it to the configured rate.
+    // @retval True if the module answers, at the configured rate or at kSafeBaudrate.
+    bool ConnectAtConfiguredBaudrate();
 
     // Read-modify-write the default configuration table into RAM + BBR: for each key, read the
     // module's current value (UBX-CFG-VALGET) and only write it (UBX-CFG-VALSET) if it differs.

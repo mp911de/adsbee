@@ -1,3 +1,5 @@
 set(ADSBEE_SUBGHZ_PROTOCOL FLARM)
 set(ADSBEE_COMMS_UART_CONSOLE 1)
 set(ADSBEE_COMMS_UART_PARITY EVEN)
+# Factory-reset default only. Stored settings keep their rate.
+set(ADSBEE_GNSS_UART_BAUDRATE 38400)

@@ -180,6 +180,9 @@ bool SettingsManager::Save() {
 void SettingsManager::ResetToDefaults() {
     Settings default_settings;
     settings = default_settings;
+#ifdef ADSBEE_GNSS_UART_BAUDRATE
+    settings.baud_rates[SerialInterface::kGNSSUART] = ADSBEE_GNSS_UART_BAUDRATE;
+#endif
 
     // Override default settings with board-specific defaults.
     // NOTE: This section is not currently used.

@@ -203,10 +203,12 @@ bool GNSSReceiver::Update() {
 
     // TEMPORARY: periodically dump module RF/antenna status (ublox UBX-MON-RF) to diagnose 0-sats.
     // Throttled harder than the counter print because polling UBX briefly competes with the NMEA drain.
+#ifndef AIRGREP
     if (healthy_ && now_ms - debug_last_rf_dump_timestamp_ms_ >= kDebugRfDumpIntervalMs) {
         debug_last_rf_dump_timestamp_ms_ = now_ms;
         DebugDumpModuleStatus();
     }
+#endif
 
     bool current_fix_valid = HasValidFix();
     if (current_fix_valid != notify_observed_valid_) {
@@ -366,5 +368,6 @@ bool GNSSReceiver::HasValidFix() const {
 }
 
 bool GNSSReceiver::GetUTCUnixMs(uint64_t& utc_unix_ms) const {
-    return active_ && !suspended_ && parser_.GetUTCUnixMs(get_time_since_boot_ms(), utc_unix_ms);
+    return active_ && !suspended_ && (module_type_ == BSP::kGNSSModuleGeneric || healthy_) &&
+           parser_.GetUTCUnixMs(get_time_since_boot_ms(), utc_unix_ms);
 }

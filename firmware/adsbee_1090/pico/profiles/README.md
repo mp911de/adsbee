@@ -8,12 +8,16 @@ ADSBEE_PROFILE=airgrep bash firmware/build.sh adsbee_1090 test
 ADSBEE_PROFILE=airgrep bash firmware/build.sh adsbee_1090 flash
 ```
 
-| Profile | COMMS_UART | UART AT console | RP2040 release output |
-|---|---|---|---|
-| `default` (unset) | 115200 8N1 | disabled | `pico/build/Release/` |
-| `airgrep` | 115200 8E1 | enabled | `pico/build/Release-airgrep/` |
+| Profile | COMMS_UART | UART AT console | GNSS UBX diagnostics | RP2040 release output |
+|---|---|---|---|---|
+| `default` (unset) | 115200 8N1 | disabled | NAV-SAT, MON-RF at 1 Hz | `pico/build/Release/` |
+| `airgrep` | 115200 8E1 | enabled | off, GGA/RMC only | `pico/build/Release-airgrep/` |
 
-Both use 3.3 V and no flow control. GNSS and USB are unchanged.
+Both use 3.3 V and no flow control. USB is unchanged. At 9600 baud the UBX diagnostics saturate
+the GNSS link and delay RMC time by seconds, which FLARM decryption cannot tolerate.
+`airgrep` defines `AIRGREP` and selects UART1 messages through `airgrep_gnss.hh`.
+It configures only message outputs, using acknowledged batches and read-back verification.
+Rejected batches are split to isolate optional unsupported outputs. Other profiles use upstream GNSS initialization.
 Debug and test builds also have separate profile directories. Flash uses the
 selected profile's image. CC1312 builds also use the profile and have separate
 outputs: `ti/sub_ghz_radio/build/Release-airgrep/` (or `Debug-airgrep`). The default

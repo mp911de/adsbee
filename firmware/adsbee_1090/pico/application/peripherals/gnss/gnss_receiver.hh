@@ -26,12 +26,10 @@ class GNSSReceiver {
     static constexpr uint32_t kVendorPowerOnDelayMs = 1000;
     static constexpr uint32_t kGenericPrePowerDelayMs = 100;
     static constexpr uint32_t kFixNotifyMinIntervalMs = 1000;
-    // If the vendor-specific init/liveness probe fails (e.g. the module is still warming up past
-    // ProbeLiveness()'s initial window), retry it periodically from Update() rather than leaving
+    // If the vendor-specific init/liveness probe fails (e.g. the module is still warming up), retry it periodically from Update() rather than leaving
     // healthy_ permanently false until the next reboot. Bounded by kMaxUnhealthyRetries so a
     // genuinely absent module doesn't stall the main loop indefinitely -- each retry costs up to
-    // SendInitCommands()'s own worst-case blocking time (see UbloxMAXM10::kProbeAttempts /
-    // kProbeTimeoutMs).
+    // SendInitCommands()'s own worst-case blocking time (see UbloxMAXM10::ConnectAtConfiguredBaudrate()).
     static constexpr uint32_t kUnhealthyRetryIntervalMs = 5000;
     static constexpr uint32_t kMaxUnhealthyRetries = 5;
     static constexpr uint16_t kRxBufferSize = 2048;

@@ -2,6 +2,8 @@
 
 #include "comms.hh"             // For comms_manager (UART I/O) and CONSOLE_* logging.
 #include "hal.hh"               // For get_time_since_boot_ms().
+#include "pico/time.h"
+#include "hardware/uart.h"
 #include "hardware/watchdog.h"  // For watchdog_update() during the blocking init/config pass.
 
 namespace {
@@ -59,7 +61,7 @@ void UbloxMAXM10::SendUbxFrame(uint8_t msg_class, uint8_t msg_id, const uint8_t*
 }
 
 bool UbloxMAXM10::ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_t timeout_ms, uint8_t* out_payload,
-                                    uint16_t out_cap, uint16_t* out_len, bool* is_ack) {
+                                    uint16_t out_cap, uint16_t* out_len, bool* is_ack, bool* config_nak) {
     // Minimal UBX frame state machine that scans the incoming byte stream (which also carries NMEA)
     // for a complete, well-formed UBX frame whose class/id match want_class/want_id. Up to out_cap
     // payload bytes are copied into out_payload (if provided); out_len receives the full payload
@@ -69,11 +71,17 @@ bool UbloxMAXM10::ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_
     uint16_t payload_len = 0, payload_idx = 0;
     UbxChecksum checksum;
     uint8_t received_ck_a = 0;
+    uint8_t payload_prefix[2] = {};
+    if (config_nak != nullptr) *config_nak = false;
 
     uint32_t start_ms = get_time_since_boot_ms();
     char c;
     while (get_time_since_boot_ms() - start_ms < timeout_ms) {
+#ifdef AIRGREP
+        watchdog_update();
+#endif
         if (!ReadBufferedByte(c)) {
+            PollUartIntoRxBuffer();
             continue;  // No byte available yet; keep polling until timeout.
         }
         uint8_t b = static_cast<uint8_t>(c);
@@ -111,6 +119,7 @@ bool UbloxMAXM10::ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_
                 }
                 break;
             case kPayload:
+                if (payload_idx < sizeof(payload_prefix)) payload_prefix[payload_idx] = b;
                 if (out_payload != nullptr && payload_idx < out_cap) out_payload[payload_idx] = b;
                 checksum.Update(b);
                 if (++payload_idx >= payload_len) state = kCkA;
@@ -123,6 +132,14 @@ bool UbloxMAXM10::ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_
                 // Frame complete. Only accept it if the Fletcher checksum verifies, so corrupted frames (or
                 // coincidental byte sequences in the interleaved NMEA stream) can't be mistaken for real replies/ACKs.
                 // want_id == kUbxIdWildcard matches any id within want_class.
+                if (config_nak != nullptr && received_ck_a == checksum.a && b == checksum.b &&
+                    msg_class == kUbxClassAck && payload_len == 2 &&
+                    payload_prefix[0] == want_class && payload_prefix[1] == want_id &&
+                    (msg_id == kUbxIdAckAck || msg_id == kUbxIdAckNak)) {
+                    *config_nak = msg_id == kUbxIdAckNak;
+                    if (out_len != nullptr) *out_len = 0;
+                    return true;
+                }
                 if (received_ck_a == checksum.a && b == checksum.b && msg_class == want_class &&
                     (want_id == kUbxIdWildcard || msg_id == want_id)) {
                     if (is_ack != nullptr) *is_ack = (msg_id == kUbxIdAckAck);
@@ -141,11 +158,6 @@ bool UbloxMAXM10::WaitForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_
 }
 
 bool UbloxMAXM10::WaitForAck(uint8_t acked_class, uint8_t acked_id) {
-    // The module replies to a VALSET with UBX-ACK-ACK (class 0x05 id 0x01) on success or
-    // UBX-ACK-NAK (id 0x00) on failure. Match any frame in the ACK class so a NAK is detected
-    // immediately (rather than scanning until timeout), and distinguish ACK from NAK via is_ack.
-    // (acked_class/acked_id are not separately verified against the payload because in our init flow
-    // only one VALSET is outstanding at a time.)
     (void)acked_class;
     (void)acked_id;
     bool is_ack = false;
@@ -155,24 +167,49 @@ bool UbloxMAXM10::WaitForAck(uint8_t acked_class, uint8_t acked_id) {
     return is_ack;
 }
 
-bool UbloxMAXM10::ProbeLiveness() {
-    // Poll UBX-MON-VER (a zero-length payload is a poll request per interface description S3.5.2)
-    // and wait briefly for the reply (class/id 0x0A 0x04). UBX in/out are enabled on UART1 in the
-    // module's factory-default state, so a present module answers even before our config pass runs.
-    //
-    // Retry up to kProbeAttempts times rather than probing once: u-blox does not publish a fixed
-    // Vcc-to-UART-ready time and recommends polling MON-VER until it answers, so a module still
-    // finishing its cold-start on the first poll is caught on a later attempt instead of being
-    // declared absent. Poke the watchdog between attempts since this whole path runs before the
-    // main super-loop's first poke.
-    for (uint32_t attempt = 0; attempt < kProbeAttempts; attempt++) {
-        SendUbxFrame(kUbxClassMon, kUbxIdMonVer, nullptr, 0);
-        if (WaitForUbxMessage(kUbxClassMon, kUbxIdMonVer, kProbeTimeoutMs)) {
-            return true;
-        }
-        watchdog_update();
+bool UbloxMAXM10::Probe() {
+    watchdog_update();
+    SendUbxFrame(kUbxClassMon, kUbxIdMonVer, nullptr, 0);
+    return WaitForUbxMessage(kUbxClassMon, kUbxIdMonVer, kProbeTimeoutMs);
+}
+
+void UbloxMAXM10::SetHostBaudrate(uint32_t baudrate) {
+    uart_tx_wait_blocking(config_.uart_handle);
+    uart_set_baudrate(config_.uart_handle, baudrate);
+    char c;
+    while (ReadBufferedByte(c)) {
     }
-    return false;
+}
+
+bool UbloxMAXM10::ConnectAtConfiguredBaudrate() {
+    uint32_t configured = GetDefaultBaudrate();
+    SetHostBaudrate(configured);
+    if (Probe()) return true;
+    if (configured == kSafeBaudrate) return false;
+    SetHostBaudrate(kSafeBaudrate);
+    if (!Probe()) {
+        SetHostBaudrate(configured);
+        return false;
+    }
+
+    // Switch RAM only and skip the acknowledgment, which may arrive at either rate. BBR is written
+    // only once the module answers at the new rate, so a failed switch is undone by a power cycle.
+    uint8_t payload[4 + 4 + 4] = {0, kCfgLayerRam, 0, 0};
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload,
+                 AppendCfgKeyValue(payload, 4, kCfgUart1Baudrate, configured, 4));
+    uart_tx_wait_blocking(config_.uart_handle);
+    sleep_ms(kBaudrateSwitchSettleMs);
+    SetHostBaudrate(configured);
+    if (Probe() && CfgValSetU4(kCfgUart1Baudrate, configured, kCfgLayerBbr)) {
+        CONSOLE_INFO("UbloxMAXM10::ConnectAtConfiguredBaudrate", "GNSS module switched from %lu to %lu baud.",
+                     static_cast<unsigned long>(kSafeBaudrate), static_cast<unsigned long>(configured));
+        return true;
+    }
+    CONSOLE_WARNING("UbloxMAXM10::ConnectAtConfiguredBaudrate",
+                    "GNSS module did not answer at %lu baud; staying at %lu baud.",
+                    static_cast<unsigned long>(configured), static_cast<unsigned long>(kSafeBaudrate));
+    SetHostBaudrate(kSafeBaudrate);
+    return Probe();
 }
 
 bool UbloxMAXM10::CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out) {
@@ -220,17 +257,6 @@ bool UbloxMAXM10::CfgValSet(uint32_t key_id, uint64_t value, uint8_t value_size_
 }
 
 int32_t UbloxMAXM10::SyncConfigDefaults(uint32_t deadline_ms) {
-    // Read-modify-write the firmware default configuration table into RAM + BBR. For each key, read
-    // the current value with VALGET and only VALSET it when it differs. On an already-provisioned
-    // module every key already matches, so nothing is written: the live navigation solution and the
-    // BBR-held ephemeris/almanac/last-position survive and the module hot-starts. BBR persists
-    // because V_BCKP is on an always-on rail. (Warm/hot-start-sensitive keys are commented out of
-    // kUbloxConfigDefaults so they're never touched here -- see ublox_max_m10_defaults.hh.)
-    //
-    // Each key costs up to kAckTimeoutMs if unanswered, so a module that dies partway through this
-    // ~371-key pass could otherwise stall past the watchdog window. Poke the watchdog each iteration
-    // and abort (returning negative) once deadline_ms passes so the caller can mark the receiver
-    // unhealthy and fall back, rather than the watchdog rebooting us mid-init.
     uint8_t layers = kCfgLayerRam | kCfgLayerBbr;
     int32_t num_written = 0;
     uint16_t num_read_fail = 0;
@@ -274,42 +300,127 @@ void UbloxMAXM10::ApplyRuntimeMessageConfig(uint8_t layers) {
     CfgValSetU1(kCfgMsgoutNmeaVtgUart1, 0, layers);
 }
 
+#ifdef AIRGREP
+bool UbloxMAXM10::ConfigureAirgrepMessages(uint8_t layers) {
+    // GNSSReceiver owns retries. An absent module costs at most two short probes per attempt.
+    if (!ConnectAtConfiguredBaudrate()) return false;
+
+    // Apply the common outputs first so queued diagnostic traffic can drain. Bootstrap only changes RAM.
+    airgrep::GNSSMessageRate bootstrap[8];
+    uint8_t bootstrap_count = 0;
+    for (const auto& message : airgrep::kGNSSMessages) {
+        switch (message.key) {
+            case kCfgMsgoutNmeaGgaUart1:
+            case kCfgMsgoutNmeaRmcUart1:
+            case kCfgMsgoutNmeaGsaUart1:
+            case kCfgMsgoutNmeaGsvUart1:
+            case kCfgMsgoutNmeaGllUart1:
+            case kCfgMsgoutNmeaVtgUart1:
+            case kCfgMsgoutUbxMonRfUart1:
+            case kCfgMsgoutUbxNavSatUart1:
+                bootstrap[bootstrap_count++] = message;
+                break;
+        }
+    }
+    if (!ApplyMessageBatch(bootstrap, bootstrap_count, kCfgLayerRam, kBootstrapReplyTimeoutMs)) return false;
+
+    constexpr uint16_t count = sizeof(airgrep::kGNSSMessages) / sizeof(airgrep::kGNSSMessages[0]);
+    for (uint16_t offset = 0; offset < count; offset += kMessageBatchSize) {
+        uint8_t batch_count = count - offset > kMessageBatchSize ? kMessageBatchSize : count - offset;
+        if (!ApplyMessageBatch(airgrep::kGNSSMessages + offset, batch_count, layers)) return false;
+    }
+    return true;
+}
+
+bool UbloxMAXM10::ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint8_t layers,
+                                     uint32_t timeout_ms) {
+    watchdog_update();
+    uint8_t payload[4 + kMessageBatchSize * 5] = {0, layers, 0, 0};
+    uint16_t len = 4;
+    for (uint8_t i = 0; i < count; i++)
+        len = AppendCfgKeyValue(payload, len, messages[i].key, messages[i].rate, 1);
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, len);
+    bool nak = false;
+    if (!ScanForUbxMessage(kUbxClassCfg, kUbxIdCfgValset, timeout_ms,
+                          nullptr, 0, nullptr, nullptr, &nak)) return false;
+    if (!nak) return VerifyMessageBatch(messages, count, timeout_ms);
+    if (count == 1) {
+        CONSOLE_WARNING("UbloxMAXM10::ApplyMessageBatch", "GNSS message key 0x%08lx rejected%s.",
+                        static_cast<unsigned long>(messages[0].key), messages[0].rate ? "" : "; skipping disabled output");
+        return messages[0].rate == 0;
+    }
+    uint8_t half = count / 2;
+    return ApplyMessageBatch(messages, half, layers, timeout_ms) &&
+           ApplyMessageBatch(messages + half, count - half, layers, timeout_ms);
+}
+
+bool UbloxMAXM10::VerifyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint32_t timeout_ms) {
+    uint8_t request[4 + kMessageBatchSize * 4] = {};
+    uint16_t len = 4;
+    for (uint8_t i = 0; i < count; i++) len = AppendCfgKeyValue(request, len, messages[i].key, 0, 0);
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValget, request, len);
+    uint32_t start_ms = get_time_since_boot_ms();
+    for (uint32_t elapsed; (elapsed = get_time_since_boot_ms() - start_ms) < timeout_ms;) {
+        uint8_t response[4 + kMessageBatchSize * 5];
+        uint16_t response_len = 0;
+        bool nak = false;
+        if (!ScanForUbxMessage(kUbxClassCfg, kUbxIdCfgValget, timeout_ms - elapsed,
+                              response, sizeof(response), &response_len, nullptr, &nak)) return false;
+        if (nak) {
+            if (count == 1) {
+                CONSOLE_WARNING("UbloxMAXM10::VerifyMessageBatch", "GNSS message key 0x%08lx read-back rejected.",
+                                static_cast<unsigned long>(messages[0].key));
+                return messages[0].rate == 0;
+            }
+            uint8_t half = count / 2;
+            return VerifyMessageBatch(messages, half, timeout_ms) &&
+                   VerifyMessageBatch(messages + half, count - half, timeout_ms);
+        }
+        if (response_len < 4 || response_len > 4 + count * 5 || (response_len - 4) % 5 != 0 ||
+            response[0] != 1 || response[1] != 0 ||
+            response[2] != 0 || response[3] != 0) continue;
+        uint32_t seen = 0;
+        bool matches = true;
+        for (uint8_t i = 0; i < (response_len - 4) / 5; i++) {
+            const uint8_t* entry = response + 4 + i * 5;
+            uint32_t key = static_cast<uint32_t>(entry[0]) | (static_cast<uint32_t>(entry[1]) << 8) |
+                           (static_cast<uint32_t>(entry[2]) << 16) | (static_cast<uint32_t>(entry[3]) << 24);
+            uint8_t j = 0;
+            while (j < count && messages[j].key != key) j++;
+            if (j == count || (seen & (1u << j))) {
+                matches = false;
+                break;
+            }
+            if (entry[4] != messages[j].rate) return false;
+            seen |= 1u << j;
+        }
+        if (!matches) continue;
+        for (uint8_t i = 0; i < count; i++) {
+            if (seen & (1u << i)) continue;
+            CONSOLE_WARNING("UbloxMAXM10::VerifyMessageBatch", "GNSS message key 0x%08lx missing from read-back.",
+                            static_cast<unsigned long>(messages[i].key));
+            if (messages[i].rate != 0) return false;
+        }
+        return true;
+    }
+    return false;
+}
+#endif
+
 bool UbloxMAXM10::SendInitCommands() {
-    // Quick liveness probe first: if the module is absent/unresponsive, bail immediately so we
-    // don't grind through the full config pass and stall boot. Init() marks the receiver unhealthy
-    // on a false return so the app falls back gracefully.
-    if (!ProbeLiveness()) {
+#ifdef AIRGREP
+    return ConfigureAirgrepMessages(kCfgLayerRam | kCfgLayerBbr);
+#else
+    if (!ConnectAtConfiguredBaudrate()) {
         return false;
     }
 
-    // Read-modify-write the default table: writes only the keys that differ, so a module we've
-    // already provisioned keeps its warm/hot-start data untouched. Bounded by kInitConfigBudgetMs so
-    // a module that answers the probe but then stops responding can't stall init past the watchdog
-    // window; a negative return means the budget was blown -> bail unhealthy and let the app fall back.
     uint32_t config_deadline_ms = get_time_since_boot_ms() + kInitConfigBudgetMs;
     if (SyncConfigDefaults(config_deadline_ms) < 0) {
         return false;
     }
 
-    // Application-specific config on top of the defaults (RAM + BBR). These are idempotent writes;
-    // if the module already has them, VALSET is harmless. (Kept as unconditional writes rather than
-    // read-modify-write since they're few and none is warm-start-sensitive.)
     uint8_t layers = kCfgLayerRam | kCfgLayerBbr;
-
-    // Sync the module's UART1 baud rate to the user-configured/persisted setting, since
-    // CFG-UART1-BAUDRATE is excluded from kUbloxConfigDefaults (see WARM-START PRESERVE note there)
-    // to avoid fighting this value. Read-modify-write like SyncConfigDefaults(): only actually issue
-    // the VALSET when the value differs. We already probed successfully at this same rate
-    // (GetDefaultBaudrate() returns the settings value), so this is normally a true no-op -- and it
-    // must stay that way, because even a same-value VALSET on this key can make the module briefly
-    // reset/re-latch its UART, corrupting the NMEA-enable writes that immediately follow.
-    {
-        uint64_t current_baudrate = 0;
-        uint32_t target_baudrate = settings_manager.settings.baud_rates[SettingsManager::kGNSSUART];
-        if (!CfgValGet(kCfgUart1Baudrate, 4, current_baudrate) || current_baudrate != target_baudrate) {
-            CfgValSetU4(kCfgUart1Baudrate, target_baudrate, layers);
-        }
-    }
 
     // NMEA sentence selection.
     ApplyRuntimeMessageConfig(layers);
@@ -325,16 +436,22 @@ bool UbloxMAXM10::SendInitCommands() {
     CfgValSetU1(kCfgMsgoutUbxNavSatUart1, 1, layers);
 
     return true;
+#endif
 }
 
 void UbloxMAXM10::ResendRuntimeConfig() {
+#ifdef AIRGREP
+    healthy_ = ConfigureAirgrepMessages(kCfgLayerRam);
+#else
     // After a UART handover (ESP32 flash) the module kept running; just re-assert the NMEA output
     // selection to RAM so sentences resume. Cheap and non-destructive -- no full config pass, so
     // the live fix is undisturbed.
+    if (!ConnectAtConfiguredBaudrate()) return;
     ApplyRuntimeMessageConfig(kCfgLayerRam);
     // TEMPORARY: also restore the diagnostic UBX output (remove with the rest of the debug hooks).
     CfgValSetU1(kCfgMsgoutUbxMonRfUart1, 1, kCfgLayerRam);
     CfgValSetU1(kCfgMsgoutUbxNavSatUart1, 1, kCfgLayerRam);
+#endif
 }
 
 void UbloxMAXM10::DebugIngestByte(char c) {
