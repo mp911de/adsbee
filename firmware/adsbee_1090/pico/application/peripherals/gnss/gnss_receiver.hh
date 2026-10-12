@@ -109,6 +109,9 @@ class GNSSReceiver {
     /** @retval True while the GNSS interface is powered/enabled and should consume UART data. */
     bool IsActive() const { return active_; }
 
+    // Call on core 0 before core 1 starts: core 1's interrupts run the shared handler chain.
+    static void InstallPPSHandler(uint pin);
+
     /** @retval Number of PPS rising edges observed since GNSS was last enabled or disabled. */
     uint32_t pps_count() const { return pps_count_; }
 
@@ -138,6 +141,8 @@ class GNSSReceiver {
      * receiver's default baud. Interrupt reception is enabled separately after final baud setup.
      */
     void ClaimUart();
+
+    void EnablePPSInterrupt();
 
     /** Start/stop interrupt-driven UART reception and reset the software RX ring buffer. */
     void EnableRxInterrupt();
