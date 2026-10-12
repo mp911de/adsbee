@@ -936,10 +936,13 @@ void ADSBee::PruneAircraftDictionary() {
             esp32.Write(ObjectDictionary::kAddrAircraftDictionaryMetrics, aircraft_dictionary.metrics,
                         true);  // require ACK.
 #if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
-            static FlarmSnapshot snapshot;
-            flarm_traffic.SetAddressReservations(aircraft_dictionary, get_time_since_boot_ms());
-            flarm_traffic.MakeSnapshot(snapshot, get_time_since_boot_ms());
-            esp32.Write(ObjectDictionary::kAddrFlarmTargets, snapshot, true);
+            // Skip until ESP32 comes up.
+            if (!esp32.IsLinkDown()) {
+                static FlarmSnapshot snapshot;
+                flarm_traffic.SetAddressReservations(aircraft_dictionary, get_time_since_boot_ms());
+                flarm_traffic.MakeSnapshot(snapshot, get_time_since_boot_ms());
+                esp32.Write(ObjectDictionary::kAddrFlarmTargets, snapshot, true);
+            }
 #endif
         }
         // Add the fresh metrics values to the pile used for TL learning.
