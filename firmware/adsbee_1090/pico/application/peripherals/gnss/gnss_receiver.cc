@@ -49,6 +49,7 @@ bool GNSSReceiver::Init() {
     // boot.
     ClaimUart();
     EnableRxInterrupt();
+    EnablePPSInterrupt();
 
     // Do not send anything here. Update() starts a generic receiver's passive probe immediately and
     // applies the non-blocking power-on delay only to vendor-specific initialization commands.
@@ -81,14 +82,6 @@ bool GNSSReceiver::Update() {
     // Continue parsing standard NMEA while active even if an optional vendor-specific probe or
     // configuration step failed. A valid NMEA fix is still usable in that situation.
     if (!active_) return true;
-
-    // PPS pulses are normally wide relative to the main-loop period, so polling avoids installing a
-    // second RP2040 GPIO callback (the ADS-B demodulator already owns the bank IRQ callback).
-    if (config_.pps_pin != UINT16_MAX) {
-        bool pps_level = gpio_get(config_.pps_pin);
-        if (pps_level && !pps_last_level_) pps_count_++;
-        pps_last_level_ = pps_level;
-    }
 
     uint32_t now_ms = get_time_since_boot_ms();
     // SendInitCommands() may parse NMEA received during its probe, so establish the timestamp
