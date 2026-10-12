@@ -56,15 +56,30 @@ uint32_t FlarmTraffic::Allocate(uint32_t now_ms) {
     return 0;
 }
 
+namespace {
+const char* FampErrorStr(int err) {
+    switch (err) {
+        case FAMP_ERR_MSG_TYPE: return "not FAMP";
+        case FAMP_ERR_VERSION: return "unsupported version";
+        case FAMP_ERR_TIME: return "no plausible time, check receiver UTC";
+        case FAMP_ERR_AMBIGUOUS: return "ambiguous time";
+        default: return "decode error";
+    }
+}
+}
+
 bool FlarmTraffic::Ingest(const FlarmRadioPacket& p, uint32_t now_ms, uint64_t utc_ms,
                           bool ref_valid, int32_t ref_lat, int32_t ref_lon) {
-    if (have_sequence_ && uint32_t(p.sequence - last_sequence_) >= 0x80000000u) return false;
-    if (have_sequence_ && p.sequence == last_sequence_) return false;
+    auto reject = [this](const char* why) { reject_reason_ = why; return false; };
+    if (have_sequence_ && uint32_t(p.sequence - last_sequence_) >= 0x80000000u) return reject("stale sequence");
+    if (have_sequence_ && p.sequence == last_sequence_) return reject("duplicate sequence");
     last_sequence_ = p.sequence;
     have_sequence_ = true;
-    if (p.age_ms >= 5000 || utc_ms < p.age_ms || (utc_ms - p.age_ms) / 1000 > UINT32_MAX) return false;
+    if (p.age_ms >= 5000) return reject("reception older than 5 s");
+    if (utc_ms < p.age_ms || (utc_ms - p.age_ms) / 1000 > UINT32_MAX) return reject("UTC out of range");
     famp_data_t d;
-    if (famp_decode(p.payload, (utc_ms - p.age_ms) / 1000, &d) != FAMP_OK || d.msg_type_ext != 0) return false;
+    if (int err = famp_decode(p.payload, (utc_ms - p.age_ms) / 1000, &d); err != FAMP_OK) return reject(FampErrorStr(err));
+    if (d.msg_type_ext != 0) return reject("unknown FAMP subtype");
     Expire(now_ms);
     FlarmTarget* slot = nullptr;
     FlarmTarget* oldest = &targets_[0];
@@ -92,7 +107,7 @@ bool FlarmTraffic::Ingest(const FlarmRadioPacket& p, uint32_t now_ms, uint64_t u
         if (matches == 1) { slot = next; same = true; }
     }
     if (!slot) slot = oldest;
-    if (same && d.fix_secs < slot->data.fix_secs) return false;
+    if (same && d.fix_secs < slot->data.fix_secs) return reject("older fix than stored");
     uint16_t frames = same ? (slot->frames == UINT16_MAX ? UINT16_MAX : slot->frames + 1) : 1;
     if (!same && slot->occupied) Release(*slot, now_ms);
     uint32_t id = same ? slot->id : d.addr_type == FAMP_ADDR_ICAO ? d.addr : 0;

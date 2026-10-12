@@ -2889,53 +2889,18 @@ void CommsManager::ParseAT(ATSource source, std::string_view line) {
 }
 
 bool CommsManager::UpdateAT() {
-    // While an AT+OTA=WRITE payload is being read, every console byte belongs to ATReadConsole(). UpdateAT() can be
-    // reached from inside that callback (network_console_putc() used to call it), so don't touch the input then.
-    if (at_console_guard_.PayloadInProgress()) {
-        return true;
-    }
-    // Check for new AT commands from STDIO.
-    int ci = getchar_timeout_us(0);
-    while (ci != PICO_ERROR_TIMEOUT) {
-        CPUMonitor::WorkScope work;
-        switch (stdio_at_line_.Push(static_cast<char>(ci), get_time_since_boot_ms())) {
-            case ATLineAssembler<kATCommandBufMaxLen>::kLine:
-                at_parser_.ParseMessage(stdio_at_line_.line());
-                break;
-            case ATLineAssembler<kATCommandBufMaxLen>::kOverflow:
-                CONSOLE_ERROR("CommsManager::UpdateAT", "AT command buffer overflow.");
-                break;
-            case ATLineAssembler<kATCommandBufMaxLen>::kBinaryLine:
-                CONSOLE_WARNING("CommsManager::UpdateAT", "Dropped a console line containing binary data.");
-                break;
-            default:
-                break;
-        }
-        if (at_console_guard_.PayloadInProgress()) {
-            return true;  // A command above started reading a binary payload (can't happen after it returns, but be safe).
-        }
-        ci = getchar_timeout_us(0);
-    }
-
-    if (esp32.IsEnabled()) {
-        // Receive incoming network console characters.
+    if (at_command_active_) return true;
+    for (ATSource source : {ATSource::kUSB, ATSource::kNetwork, ATSource::kUART}) {
+        if (source == ATSource::kUART && !ADSBEE_COMMS_UART_CONSOLE) continue;
+        at_source_ = source;
+        auto& input = ATInput();
         char c;
-        while (!at_console_guard_.PayloadInProgress() && esp32_console_rx_queue.Dequeue(c)) {
-            CPUMonitor::WorkScope work;
-            switch (network_at_line_.Push(c, get_time_since_boot_ms())) {
-                case ATLineAssembler<kATCommandBufMaxLen>::kLine:
-                    CONSOLE_INFO("CommsManager::UpdateAT", "Received network console message: %.*s\r\n",
-                                 (int)network_at_line_.line().length(), network_at_line_.line().data());
-                    at_parser_.ParseMessage(network_at_line_.line());
-                    break;
-                case ATLineAssembler<kATCommandBufMaxLen>::kOverflow:
-                    CONSOLE_ERROR("CommsManager::UpdateAT", "Network console buffer overflow.");
-                    break;
-                case ATLineAssembler<kATCommandBufMaxLen>::kBinaryLine:
-                    CONSOLE_WARNING("CommsManager::UpdateAT", "Dropped a network console line containing binary data.");
-                    break;
-                default:
-                    break;
+        bool error;
+        // Bound work so a continuous sender cannot starve receiver processing.
+        for (uint16_t i = 0; i < kATCommandBufMaxLen && ReadATByte(c, error); ++i) {
+            if (input.Push(c, get_time_since_boot_ms(), error)) {
+                ParseAT(source, input.line());
+                at_source_ = source;
             }
         }
     }
