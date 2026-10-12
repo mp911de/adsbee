@@ -845,8 +845,8 @@ bool ADSBeeServer::TCPServerInit() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = kHTTPServerStackSizeBytes;
     // config.task_caps = MALLOC_CAP_IRAM_8BIT;
-    config.max_open_sockets = 16;  // Must be <= CONFIG_LWIP_MAX_SOCKETS - 3 (currently 20 - 3 = 17).
-    // 9 URIs are registered below (6 HTTP + 3 websocket); the default limit is 8 and a
+    config.max_open_sockets = 8;
+    // 8 URIs are registered below (5 HTTP + 3 websocket); the default limit is 8 and a
     // failed registration aborts boot via ESP_ERROR_CHECK.
     config.max_uri_handlers = 16;
     config.close_fn = ws_close_fd;
