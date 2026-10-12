@@ -845,6 +845,10 @@ class AircraftDictionary {
         uint16_t raw_remote_id_frames = 0;    // Remote ID advertisements received (pre-decode).
         uint16_t valid_remote_id_frames = 0;  // Remote ID advertisements that decoded successfully.
 
+        uint16_t raw_flarm_frames = 0;    // CRC-valid FLARM frames from the CC1312.
+        uint16_t valid_flarm_frames = 0;  // FLARM frames decoded and accepted by the tracker.
+        uint16_t num_flarm_aircraft = 0;  // Filled on the ESP32 from the FLARM snapshot.
+
         /**
          * Formats the metrics dictionary into a JSON packet with the following structure.
          * {
@@ -896,12 +900,16 @@ class AircraftDictionary {
             chars_written += snprintf(buf + chars_written, buf_len - chars_written,
                                       ", \"raw_remote_id_frames\": %u, \"valid_remote_id_frames\": %u",
                                       raw_remote_id_frames, valid_remote_id_frames);
+            chars_written += snprintf(buf + chars_written, buf_len - chars_written,
+                                      ", \"raw_flarm_frames\": %u, \"valid_flarm_frames\": %u",
+                                      raw_flarm_frames, valid_flarm_frames);
 
             // Add dictionary stats.
             chars_written +=
                 snprintf(buf + chars_written, buf_len - chars_written,
-                         ", \"num_mode_s_aircraft\": %u, \"num_uat_aircraft\": %u, \"num_remote_id_aircraft\": %u",
-                         num_mode_s_aircraft, num_uat_aircraft, num_remote_id_aircraft);
+                         ", \"num_mode_s_aircraft\": %u, \"num_uat_aircraft\": %u, \"num_remote_id_aircraft\": %u"
+                         ", \"num_flarm_aircraft\": %u",
+                         num_mode_s_aircraft, num_uat_aircraft, num_remote_id_aircraft, num_flarm_aircraft);
             chars_written += snprintf(buf + chars_written, buf_len - chars_written, "}");
             return chars_written;
         }
@@ -982,6 +990,11 @@ class AircraftDictionary {
         metrics_counter_.valid_uat_adsb_frames += valid_uat_adsb_frames;
         metrics_counter_.raw_uat_uplink_frames += raw_uat_uplink_frames;
         metrics_counter_.valid_uat_uplink_frames += valid_uat_uplink_frames;
+    }
+
+    inline void RecordFlarmMetrics(uint16_t raw_frames, uint16_t valid_frames) {
+        metrics_counter_.raw_flarm_frames += raw_frames;
+        metrics_counter_.valid_flarm_frames += valid_frames;
     }
 
     /**

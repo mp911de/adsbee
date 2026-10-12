@@ -31,6 +31,7 @@ public:
     static constexpr size_t kCapacity = 64;
     bool Ingest(const FlarmRadioPacket& packet, uint32_t now_ms, uint64_t utc_ms,
                 bool reference_valid, int32_t ref_lat, int32_t ref_lon);
+    const char* reject_reason() const { return reject_reason_; }  // Why the last Ingest returned false.
     void BeginReport(uint32_t now_ms) { Expire(now_ms); report_index_ = 0; }
     // Next record of the round, 0 when the round is complete, negative when a record did not fit.
     int NextReport(char* buf, size_t capacity, uint32_t now_ms);
@@ -50,4 +51,5 @@ private:
     uint32_t last_sequence_ = 0;
     bool have_sequence_ = false;
     size_t report_index_ = kCapacity;
+    const char* reject_reason_ = "";
 };

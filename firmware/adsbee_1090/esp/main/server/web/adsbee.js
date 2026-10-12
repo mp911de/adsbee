@@ -2,6 +2,7 @@ const METRIC_UNITS = {
     'num_mode_s_aircraft': 'aircraft',
     'num_uat_aircraft': 'aircraft',
     'num_remote_id_aircraft': 'drones',
+    'num_flarm_aircraft': 'aircraft',
 };
 
 // Input types that take no typed or pasted text.
@@ -1085,8 +1086,10 @@ const TRAFFIC_SOURCES = {
     rid: { label: 'Remote ID', stroke: '#c026d3', dash: '' },
     flarm: { label: 'FLARM', stroke: '#16876b', dash: '' },
 };
-const kFlarmAircraftTypes = ['Unknown', 'Glider', 'Tow plane', 'Helicopter', 'Skydiver', 'Drop plane',
-    'Hang glider', 'Paraglider', 'Powered', 'Jet', 'UFO', 'Balloon', 'Airship', 'UAV', 'Reserved', 'Static obstacle'];
+// FAMP aircraft types (FTD-116), same order as famp_acft_type_str() in flarm_famp.c.
+const kFlarmAircraftTypes = ['Undefined', 'Glider', 'Towplane', 'Helicopter', 'Parachute', 'Dropplane',
+    'Hangglider', 'Paraglider', 'Single-engine piston', 'Heavy/complex fixed wing', 'Gyrocopter', 'Balloon',
+    'Airship', 'UAV', 'Airfield', 'Static obstacle', 'eVTOL/UAM', 'UAV Open', 'UAV Specific', 'UAV Certified'];
 // Positions older than this (seconds, from "seen_pos") are drawn faded.
 const kStalePositionS = 15;
 
@@ -1480,7 +1483,7 @@ class LiveMap {
         }
 
         const defs = [
-            ['hex', 'ICAO', v => v],
+            ['hex', ac.hex?.startsWith('~') ? 'Address' : 'ICAO', v => v],
             ['srcLabel', 'Source', v => v],
             ['flight', 'Callsign', v => v.trim() || null],
             ['squawk', 'Squawk', v => v],

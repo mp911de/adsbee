@@ -755,6 +755,9 @@ void ADSBeeServer::SendNetworkMetricsMessage() {
     combined_metrics.valid_uat_adsb_frames = adsbee_server.rp2040_aircraft_dictionary_metrics.valid_uat_adsb_frames;
     combined_metrics.raw_uat_uplink_frames = adsbee_server.rp2040_aircraft_dictionary_metrics.raw_uat_uplink_frames;
     combined_metrics.valid_uat_uplink_frames = adsbee_server.rp2040_aircraft_dictionary_metrics.valid_uat_uplink_frames;
+    combined_metrics.raw_flarm_frames = adsbee_server.rp2040_aircraft_dictionary_metrics.raw_flarm_frames;
+    combined_metrics.valid_flarm_frames = adsbee_server.rp2040_aircraft_dictionary_metrics.valid_flarm_frames;
+    combined_metrics.num_flarm_aircraft = flarm_reports_.Count();
 
     // Broadcast dictionary metrics over the metrics Websocket.
     char metrics_message[kNetworkMetricsMessageMaxLen];

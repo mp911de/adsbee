@@ -120,6 +120,13 @@ uint16_t FlarmReports::WriteGDL90(size_t index, uint8_t* buf, size_t capacity, u
     else data.navigation_accuracy_category_position = 6;
     static constexpr uint8_t categories[] = {0,9,0,7,11,0,12,12,0,0,7,10,10,14,0,19,0,14,14,14};
     data.emitter_category = r.aircraft_type < sizeof(categories) ? categories[r.aircraft_type] : 0;
+    // FAMP has no call sign: a type code plus the address tail tells a pilot what to look for and keeps targets apart.
+    static constexpr char kTypeCodes[][5] = {"FLRM", "GLDR", "TOWP", "HELI", "PARA", "DROP", "HANG", "PARG", "PSTN",
+                                             "HEVY", "GYRO", "BALN", "SHIP", "DRON", "AFLD", "OBST", "EVTL", "DRON",
+                                             "DRON", "DRON"};
+    snprintf(data.callsign, sizeof(data.callsign), "%s%04lX",
+             kTypeCodes[r.aircraft_type < sizeof(kTypeCodes) / sizeof(kTypeCodes[0]) ? r.aircraft_type : 0],
+             static_cast<unsigned long>(r.id & 0xFFFF));
     if (r.urgency >= 2) data.emergency_priority_code =
         GDL90Reporter::GDL90TargetReportData::kEmergencyPriorityCodeGeneralEmergency;
     uint16_t len = encoder_.WriteGDL90TargetReportMessage(buf, 64, data, false);

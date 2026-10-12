@@ -1106,7 +1106,8 @@ TEST(AircraftDictionary, MetricsToJSON) {
 \"raw_uat_adsb_frames\": 0, \"valid_uat_adsb_frames\": 0, \
 \"raw_uat_uplink_frames\": 0, \"valid_uat_uplink_frames\": 0, \
 \"raw_remote_id_frames\": 0, \"valid_remote_id_frames\": 0, \
-\"num_mode_s_aircraft\": 0, \"num_uat_aircraft\": 0, \"num_remote_id_aircraft\": 0\
+\"raw_flarm_frames\": 0, \"valid_flarm_frames\": 0, \
+\"num_mode_s_aircraft\": 0, \"num_uat_aircraft\": 0, \"num_remote_id_aircraft\": 0, \"num_flarm_aircraft\": 0\
 }";
     EXPECT_EQ(metrics.ToJSON(buf, AircraftDictionary::Metrics::kMetricsJSONMaxLen), strlen(expected_result));
     EXPECT_STREQ(buf, expected_result);

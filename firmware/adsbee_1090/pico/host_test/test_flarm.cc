@@ -314,6 +314,7 @@ TEST(Flarm, ReceivedFixUsesResolvedIdentityAndGDL90Mappings) {
     EXPECT_EQ(b[11],0xff); EXPECT_EQ(b[12],0xf9); // unavailable altitude, updated/airborne/true track
     EXPECT_EQ(b[13],0x8b); EXPECT_EQ(b[17],64); // NIC8, NACp11, eastbound
     EXPECT_EQ(b[18],9); EXPECT_EQ(b[27],0x10); // glider, general emergency
+    EXPECT_EQ(std::string(reinterpret_cast<char*>(&b[19]),8),"GLDR9000");
     auto local=Reports(traffic,1000); ASSERT_EQ(local.size(),1u); EXPECT_EQ(local[0][1],"F09000");
     EXPECT_EQ(output.WriteGDL90(0,bytes,sizeof(bytes),1100,adsb),0u);
     traffic.MakeSnapshot(snapshot,2000); output.Update(snapshot,2000);

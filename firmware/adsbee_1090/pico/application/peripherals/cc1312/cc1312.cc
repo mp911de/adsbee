@@ -144,14 +144,29 @@ bool CC1312::Update() {
                 flarm_packets_dropped_ = batch.dropped;
                 CONSOLE_WARNING("CC1312::Update", "CC1312 dropped %u FLARM packets.", lost);
             }
+            uint16_t accepted = 0;
             if (utc_valid) {
                 const auto& fix = gnss->fix();
                 bool reference_valid = gnss->HasValidFix();
                 int32_t lat = reference_valid ? static_cast<int32_t>(double(fix.latitude_deg) * 1e7) : 0;
                 int32_t lon = reference_valid ? static_cast<int32_t>(double(fix.longitude_deg) * 1e7) : 0;
-                for (unsigned i = 0; i < batch.count; ++i)
-                    adsbee.flarm_traffic.Ingest(batch.packets[i], received_ms, utc_ms, reference_valid, lat, lon);
+                for (unsigned i = 0; i < batch.count; ++i) {
+                    const auto& packet = batch.packets[i];
+                    if (adsbee.flarm_traffic.Ingest(packet, received_ms, utc_ms, reference_valid, lat, lon)) {
+                        ++accepted;
+                    } else {
+                        uint64_t rx_utc_ms = utc_ms - packet.age_ms;
+                        CONSOLE_INFO("CC1312::Update",
+                                     "FLARM packet %lu rejected: %s (receiver UTC %lu.%03u, age %u ms, %d dBm).",
+                                     (unsigned long)packet.sequence, adsbee.flarm_traffic.reject_reason(),
+                                     (unsigned long)(rx_utc_ms / 1000), (unsigned)(rx_utc_ms % 1000),
+                                     (unsigned)packet.age_ms, (int)packet.rssi_dbm);
+                    }
+                }
+            } else if (batch.count) {
+                CONSOLE_INFO("CC1312::Update", "FLARM: %u packets discarded, no GNSS UTC.", (unsigned)batch.count);
             }
+            adsbee.aircraft_dictionary.RecordFlarmMetrics(batch.count, accepted);
             ObjectDictionary::RollQueueRequest roll{.queue_id = ObjectDictionary::kQueueIDFlarmPackets, .num_items = batch.count};
             if (!adsbee.subg_radio.Write(ObjectDictionary::kAddrRollQueue, roll, true)) return false;
         }

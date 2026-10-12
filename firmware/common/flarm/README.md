@@ -61,6 +61,8 @@ existing GDL90 encoder and queue. Remote feeds receive no FLARM traffic.
 Each newer valid position is eligible once, on the one-second reporting cycle.
 Fixes older than six seconds at emission are skipped. Retained coordinates are
 never replayed or extrapolated. Stealth/no-track and ownship ICAO targets are filtered.
+The GDL90 call sign is a 4-letter FAMP aircraft type code plus the last four hex digits of the
+resolved address, e.g. `GLDR9004`, since FAMP carries no call sign.
 Pressure altitude is unavailable; FAMP geometric altitude is not substituted.
 
 See the [export contract](../../../docs/adr/0001-flarm-gdl90-onboard-export.md) for
