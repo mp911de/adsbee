@@ -67,6 +67,21 @@ See the [export contract](../../../docs/adr/0001-flarm-gdl90-onboard-export.md) 
 integrity, aircraft-type and duplicate-source mappings. ForeFlight and SkyDemon
 handling of unavailable altitude and self-assigned addresses needs device validation.
 
+## Live map
+
+The onboard map receives FLARM through the existing `/aircraft` WebSocket.
+Stealth/no-track and unresolved positions are omitted. Explicit ICAO duplicates
+use the same source preference as GDL90; a winning FLARM record carries the
+suppressed Mode S callsign, squawk, pressure altitude and category. Map state
+remains visible for 60 seconds since reception, with positions faded after
+15 seconds. The GDL90 six-second emission limit does not apply to retained map state.
+
+JSON uses `type: "flarm"`, resolved `hex` IDs (`~` for non-ICAO), `alt_geom` in feet,
+`gs` in knots, `geom_rate` in feet/minute, and original `seen`/`seen_pos` ages in seconds.
+`fix_utc` identifies new trail points. Native details use `flarm_*` fields.
+Targets are resent every second; the browser drops any target silent for 5 seconds.
+Altitude is labeled geometric (HAE), never pressure altitude.
+
 UTC derives from dated RMC sentences, with 5-second freshness and no PPS discipline.
 Without UTC the RP2040 discards packets until time becomes available.
 

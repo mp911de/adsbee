@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "pfb_mutex.hh"
 
 // Shared limits for the tracker (RP2040) and the GDL90 adapter (ESP32).
 constexpr uint32_t kFlarmSyntheticIdBase = 0xF09000, kFlarmSyntheticIdCount = 1024;
@@ -34,11 +35,14 @@ static_assert(sizeof(FlarmSnapshot) == 3592);
 
 class FlarmSnapshotReceiver {
 public:
+    FlarmSnapshotReceiver() { PFB_MUTEX_INIT(mutex_); }
+    // One SPI writer fills the buffer in place; readers copy it only while it holds a complete, valid snapshot.
     bool Write(const uint8_t* bytes, size_t length, size_t offset, uint32_t now_ms);
-    const FlarmSnapshot& Snapshot() const { return published_; }
-    uint32_t ReceivedMs() const { return received_ms_; }
+    bool CopySnapshot(FlarmSnapshot& snapshot, uint32_t& received_ms);
 private:
-    FlarmSnapshot staging_, published_;
+    PFB_MUTEX_TYPE mutex_;
+    FlarmSnapshot snapshot_;
+    bool complete_ = false;
     size_t next_offset_ = 0;
     uint32_t started_ms_ = 0, received_ms_ = 0;
 };

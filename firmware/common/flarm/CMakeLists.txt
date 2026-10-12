@@ -6,7 +6,7 @@ foreach(t application sub_ghz_radio host_test host_test_fpu)
             target_sources(${t} PRIVATE flarm_traffic.cpp flarm_snapshot.cpp)
         endif()
         if(t MATCHES "^host_test")
-            target_sources(${t} PRIVATE flarm_gdl90.cpp)  # ESP32 adapter, unit tested on the host.
+            target_sources(${t} PRIVATE flarm_reports.cpp)  # ESP32 adapter, unit tested on the host.
         endif()
     endif()
 endforeach()

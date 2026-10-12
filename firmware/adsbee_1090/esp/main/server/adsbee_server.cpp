@@ -231,10 +231,8 @@ bool ADSBeeServer::Init() {
 }
 
 bool ADSBeeServer::ReceiveFlarmTargets(const uint8_t* bytes, size_t length, size_t offset) {
-    if (!flarm_mutex_ || xSemaphoreTake(flarm_mutex_, 0) != pdTRUE) return false;
     uint32_t now_ms = get_time_since_boot_ms();
     bool ok = flarm_receiver_.Write(bytes, length, offset, now_ms);
-    xSemaphoreGive(flarm_mutex_);
     static uint32_t last_error_ms = 0;
     if (!ok && now_ms - last_error_ms >= 10000) {
         last_error_ms = now_ms;
@@ -245,10 +243,7 @@ bool ADSBeeServer::ReceiveFlarmTargets(const uint8_t* bytes, size_t length, size
 }
 
 bool ADSBeeServer::Update() {
-    if (flarm_mutex_ && xSemaphoreTake(flarm_mutex_, 0) == pdTRUE) {
-        flarm_gdl90_.Update(flarm_receiver_.Snapshot(), flarm_receiver_.ReceivedMs());
-        xSemaphoreGive(flarm_mutex_);
-    }
+    flarm_reports_.Update(flarm_receiver_);
     bool ret = true;
     // Do NOT call pico.Update() from here since that's already taken care of by the SPIReceiveTask.
     // Update the LED here so it has better time resolution than it would in the SPI task, which blocks frequently.
@@ -435,7 +430,7 @@ bool ADSBeeServer::Update() {
     const bool between_metrics = (ms_since_metrics >= kAircraftJSONMetricsGapMs &&
                                   ms_since_metrics < kAircraftJSONReportingIntervalMs - kAircraftJSONMetricsGapMs) ||
                                  ms_since_metrics >= 2 * kAircraftJSONReportingIntervalMs;
-    if (aircraft_json_next_uid_ >= aircraft_json_num_uids_ && between_metrics &&
+    if (AircraftJSONListDone() && between_metrics &&
         timestamp_ms - last_aircraft_json_report_timestamp_ms_ >=
             kAircraftJSONReportingIntervalMs - kAircraftJSONMetricsGapMs) {
         last_aircraft_json_report_timestamp_ms_ = timestamp_ms;
@@ -443,7 +438,8 @@ bool ADSBeeServer::Update() {
             network_aircraft.GetNumClients() > 0
                 ? ListAircraftJSONLiveMapUIDs(aircraft_dictionary, timestamp_ms, aircraft_json_uids_,
                                               kAircraftDictionaryMaxNumAircraft,
-                                              aircraft_dictionary.GetReportFilter(settings_manager.settings))
+                                              aircraft_dictionary.GetReportFilter(settings_manager.settings),
+                                              &flarm_reports_)
                 : 0;
         aircraft_json_next_uid_ = 0;
     }
@@ -528,7 +524,7 @@ bool ADSBeeServer::ReportGDL90() {
     for (auto& itr : aircraft_dictionary.dict) {
         aircraft_index++;
         if (!aircraft_dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms) ||
-            flarm_gdl90_.SuppressesAircraft(itr.first, aircraft_dictionary, timestamp_ms)) {
+            flarm_reports_.SuppressesAircraft(itr.first, aircraft_dictionary, timestamp_ms)) {
             continue;  // Another entry (e.g. the aircraft's own ADS-B) is reported for this ICAO address.
         }
         if (std::visit([&report_filter](const auto& a) { return report_filter.Excludes(a); }, itr.second)) {
@@ -586,8 +582,8 @@ bool ADSBeeServer::ReportGDL90() {
     }
 
     // Local FLARM targets share the aircraft message stream.
-    for (size_t i = 0; i < flarm_gdl90_.Count(); ++i) {
-        aircraft_msg_buf_len = flarm_gdl90_.WriteReport(i, aircraft_msg_buf, sizeof(aircraft_msg_buf), timestamp_ms,
+    for (size_t i = 0; i < flarm_reports_.Count(); ++i) {
+        aircraft_msg_buf_len = flarm_reports_.WriteGDL90(i, aircraft_msg_buf, sizeof(aircraft_msg_buf), timestamp_ms,
                                                         aircraft_dictionary, ownship_data.participant_address);
         if (!aircraft_msg_buf_len) continue;
         if (message.len + aircraft_msg_buf_len > CommsManager::NetworkMessage::kMaxLenBytes) {
@@ -1288,16 +1284,21 @@ bool ADSBeeServer::TCPServerInit() {
     return true;
 }
 
+// FLARM entries follow the listed dictionary UIDs in the Live Map output.
+bool ADSBeeServer::AircraftJSONListDone() const {
+    return aircraft_json_next_uid_ >= aircraft_json_num_uids_ + flarm_reports_.Count();
+}
+
 void ADSBeeServer::SendAircraftJSONMessages() {
     // Batch aircraft into JSON arrays of up to one websocket message each. One frame per aircraft (two socket writes
     // each) cost ~100 TCP segments per second per client at a busy site; on the W5500 Ethernet board the network tasks
     // doing that outrank the SPI receive task, which then missed RP2040 handshakes until the RP2040 reset the board.
     // Frames of up to kAircraftJSONBatchMaxLen always fit a writable socket whole.
-    if (aircraft_json_next_uid_ >= aircraft_json_num_uids_) {
+    if (AircraftJSONListDone()) {
         return;
     }
     if (network_aircraft.GetNumClients() == 0) {
-        aircraft_json_next_uid_ = aircraft_json_num_uids_;  // Nobody left to send the rest to.
+        aircraft_json_next_uid_ = UINT16_MAX;  // Nobody left to send the rest to.
         return;
     }
     char batch_buf[kAircraftJSONBatchMaxLen];
@@ -1305,7 +1306,8 @@ void ADSBeeServer::SendAircraftJSONMessages() {
     while (get_time_since_boot_us() - start_us < kAircraftJSONPassBudgetUs) {
         uint16_t len =
             WriteAircraftJSONLiveMapArray(aircraft_dictionary, get_time_since_boot_ms(), aircraft_json_uids_,
-                                          aircraft_json_num_uids_, aircraft_json_next_uid_, batch_buf, sizeof(batch_buf));
+                                          aircraft_json_num_uids_, aircraft_json_next_uid_, batch_buf, sizeof(batch_buf),
+                                          &flarm_reports_);
         if (len == 0) {
             break;
         }

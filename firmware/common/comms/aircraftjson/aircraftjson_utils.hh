@@ -1,4 +1,6 @@
 #pragma once
+#include <type_traits>
+
 #include "aircraft_dictionary.hh"
 #include "stdio.h"
 
@@ -567,20 +569,27 @@ inline int16_t WriteAircraftJSONRemoteIDAircraftStr(char buf[], const RemoteIDAi
  * @param[out] uids UIDs of the aircraft to report.
  * @param[in] max_uids Length of uids.
  * @param[in] filter AircraftDictionary::GetReportFilter(): aircraft to leave out. The default keeps all.
+ * @param[in] flarm Optional FLARM state (FlarmReports): aircraft it suppresses are left out.
  * @retval Number of UIDs written.
  */
+template <typename FlarmSource = void>
 inline uint16_t ListAircraftJSONLiveMapUIDs(const AircraftDictionary& dictionary, uint32_t timestamp_ms,
                                             uint32_t uids[], uint16_t max_uids,
-                                            const AircraftReportFilter& filter = AircraftReportFilter()) {
+                                            const AircraftReportFilter& filter = AircraftReportFilter(),
+                                            const FlarmSource* flarm = nullptr) {
     uint16_t num_uids = 0;
     for (const auto& itr : dictionary.dict) {
         if (num_uids >= max_uids) {
             break;
         }
-        if (dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms) &&
-            !std::visit([&filter](const auto& a) { return filter.Excludes(a); }, itr.second)) {
-            uids[num_uids++] = itr.first;
+        if (!dictionary.IsPreferredReportForAddress(itr.first, timestamp_ms) ||
+            std::visit([&filter](const auto& a) { return filter.Excludes(a); }, itr.second)) {
+            continue;
         }
+        if constexpr (!std::is_void_v<FlarmSource>) {
+            if (flarm && flarm->SuppressesAircraft(itr.first, dictionary, timestamp_ms, UINT32_MAX)) continue;
+        }
+        uids[num_uids++] = itr.first;
     }
     return num_uids;
 }
@@ -596,20 +605,29 @@ inline uint16_t ListAircraftJSONLiveMapUIDs(const AircraftDictionary& dictionary
  * @param[in,out] next Index of the next UID to write; advanced past the UIDs written or skipped.
  * @param[out] buf Buffer for the array.
  * @param[in] buf_len Length of buf. Must hold at least one aircraft object plus the brackets.
+ * @param[in] flarm Optional FLARM state (FlarmReports). Its entries follow the dictionary entries, addressed by
+ *                  next - num_uids.
  * @retval Length of the array in buf, or 0 once no aircraft remain.
  */
+template <typename FlarmSource = void>
 inline uint16_t WriteAircraftJSONLiveMapArray(const AircraftDictionary& dictionary, uint32_t timestamp_ms,
                                               const uint32_t uids[], uint16_t num_uids, uint16_t& next, char buf[],
-                                              uint16_t buf_len) {
+                                              uint16_t buf_len, const FlarmSource* flarm = nullptr) {
     char json_buf[kAircraftJSONMessageStrMaxLen];
     uint16_t len_used = 0;
-    for (; next < num_uids; next++) {
-        auto itr = dictionary.dict.find(uids[next]);
-        if (itr == dictionary.dict.end()) {
-            continue;  // Removed since the list was made.
-        }
+    uint16_t num_entries = num_uids;
+    if constexpr (!std::is_void_v<FlarmSource>) {
+        if (flarm) num_entries += flarm->Count();
+    }
+    for (; next < num_entries; next++) {
         int16_t len = -1;
-        if (const ModeSAircraft* ac = std::get_if<ModeSAircraft>(&itr->second); ac) {
+        if (next >= num_uids) {
+            if constexpr (!std::is_void_v<FlarmSource>) {
+                len = flarm->WriteJSON(next - num_uids, json_buf, sizeof(json_buf), timestamp_ms, dictionary);
+            }
+        } else if (auto itr = dictionary.dict.find(uids[next]); itr == dictionary.dict.end()) {
+            continue;  // Removed since the list was made.
+        } else if (const ModeSAircraft* ac = std::get_if<ModeSAircraft>(&itr->second); ac) {
             len = WriteAircraftJSONModeSAircraftStr(json_buf, *ac, timestamp_ms);
         } else if (const UATAircraft* ac = std::get_if<UATAircraft>(&itr->second); ac) {
             len = WriteAircraftJSONUATAircraftStr(json_buf, *ac, timestamp_ms);

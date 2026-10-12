@@ -1,5 +1,4 @@
-// Tests for the settings GUI engine in settings.js against a scripted AT transport. These are run
-// locally when changing settings.js; CI only runs settings_drift.test.js.
+// Tests for the settings GUI engine in settings.js against a scripted AT transport. Runs in CI (web_ui_test job).
 // Run: node --test firmware/adsbee_1090/esp/main/server/web/test/settings.test.js
 'use strict';
 const test = require('node:test');
