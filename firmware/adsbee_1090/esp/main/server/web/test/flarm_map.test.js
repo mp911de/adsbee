@@ -32,7 +32,7 @@ test('FLARM replacement clears old source fields and normal disconnect cleanup w
 
 test('table labels FLARM altitude as geometric', () => {
     const store = new AircraftStore(); store.ingest(target);
-    const cells = Array.from({ length: 10 }, () => ({ style: {}, textContent: '' }));
+    const cells = Array.from({ length: 12 }, () => ({ style: {}, textContent: '' }));
     const row = { dataset: { key: target.hex }, querySelectorAll: () => cells,
         classList: { toggle() {} } };
     const tbody = { querySelectorAll: () => [row], querySelector: () => row, appendChild() {} };
