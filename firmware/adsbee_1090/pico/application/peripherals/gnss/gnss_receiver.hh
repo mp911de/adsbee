@@ -4,6 +4,7 @@
 #include "hardware/irq.h"
 #include "hardware/uart.h"  // For uart_inst_t and UART bring-up in Init().
 #include "nmea_parser.hh"
+#include "pps_clock.hh"
 #include "pico/stdlib.h"  // For gpio_* and tight_loop_contents() used by subclasses/impl.
 #include "settings.hh"
 
@@ -97,7 +98,7 @@ class GNSSReceiver {
      */
     bool HasValidFix() const;
 
-    // UTC estimated from NMEA reception time, not PPS-disciplined.
+    // UTC from the last PPS edge when available, otherwise from RMC reception time.
     bool GetUTCUnixMs(uint64_t& utc_unix_ms) const;
 
     /**
@@ -181,10 +182,13 @@ class GNSSReceiver {
     bool notify_pending_ = false;
     bool notify_has_emitted_ = false;
     uint32_t notify_last_timestamp_ms_ = 0;
-    bool pps_last_level_ = false;
     // Shared by all dynamically selected receiver instances and reset on every SetEnable() call.
-    // Updated from the main loop, so no atomic access is required.
-    static inline uint32_t pps_count_ = 0;
+    static inline volatile uint32_t pps_count_ = 0;
+    static inline volatile uint32_t pps_edge_us_ = 0;
+    static inline uint pps_irq_pin_ = UINT16_MAX;
+    static void PPSIRQHandler();
+    void LabelPPSEdge();
+    PPSClock pps_clock_;
 
     // Single-producer (UART ISR), single-consumer (main loop) ring buffer. Monotonic 16-bit indices
     // make all 2048 slots usable; unsigned subtraction remains valid across index wrap.

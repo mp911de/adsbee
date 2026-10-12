@@ -54,6 +54,7 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_mode_s_single_bit_correction.cc
         test_mode_s_single_bit_filter.cc
         test_nmea_parser.cc
+        test_pps_clock.cc
         test_flarm.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc
         test_platform.cc
