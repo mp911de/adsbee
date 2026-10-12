@@ -593,44 +593,34 @@ bool ADSBeeServer::ReportGDL90UplinkDataMessage(const DecodedUATUplinkPacket& up
 //     }
 // }
 
-static esp_err_t root_handler(httpd_req_t* req) {
-    httpd_resp_send(req, (const char*)index_html_start, index_html_end - index_html_start);
-    return ESP_OK;
+// Static assets close their connection after the transfer so idle keep-alive sockets never crowd out the websockets.
+static esp_err_t SendAsset(httpd_req_t* req, const char* type, const uint8_t* start, const uint8_t* end, bool gzipped) {
+    httpd_resp_set_type(req, type);
+    if (gzipped) httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    esp_err_t ret = httpd_resp_send(req, (const char*)start, end - start);
+    httpd_sess_trigger_close(req->handle, httpd_req_to_sockfd(req));
+    return ret;
 }
 
-static esp_err_t css_handler(httpd_req_t* req) {
-    // Set the CSS content type
-    httpd_resp_set_type(req, "text/css");
-
-    // Send the CSS file
-    httpd_resp_send(req, (const char*)style_css_start, style_css_end - style_css_start);
-
-    return ESP_OK;
+static esp_err_t root_handler(httpd_req_t* req) {
+    return SendAsset(req, "text/html", index_html_start, index_html_end, true);
 }
 
 static esp_err_t adsbee_js_handler(httpd_req_t* req) {
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_send(req, (const char*)adsbee_js_start, adsbee_js_end - adsbee_js_start);
-    return ESP_OK;
+    return SendAsset(req, "application/javascript", adsbee_js_start, adsbee_js_end, true);
 }
 
 static esp_err_t settings_js_handler(httpd_req_t* req) {
-    httpd_resp_set_type(req, "application/javascript");
-    // EMBED_TXTFILES null-terminates the embedded file; don't send the terminator.
-    httpd_resp_send(req, (const char*)settings_js_start, settings_js_end - settings_js_start);
-    return ESP_OK;
+    return SendAsset(req, "application/javascript", settings_js_start, settings_js_end, true);
 }
 
 static esp_err_t ota_updater_js_handler(httpd_req_t* req) {
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_send(req, (const char*)ota_updater_js_start, ota_updater_js_end - ota_updater_js_start);
-    return ESP_OK;
+    return SendAsset(req, "application/javascript", ota_updater_js_start, ota_updater_js_end, true);
 }
 
 static esp_err_t firmware_release_js_handler(httpd_req_t* req) {
-    httpd_resp_set_type(req, "application/javascript");
-    httpd_resp_send(req, (const char*)firmware_release_js_start, firmware_release_js_end - firmware_release_js_start);
-    return ESP_OK;
+    return SendAsset(req, "application/javascript", firmware_release_js_start, firmware_release_js_end, true);
 }
 
 static void json_escape(char* out, size_t out_size, const char* in) {
@@ -679,15 +669,8 @@ static esp_err_t feed_api_get_handler(httpd_req_t* req) {
 }
 
 esp_err_t favicon_handler(httpd_req_t* req) {
-    httpd_resp_set_type(req, "image/png");
     httpd_resp_set_hdr(req, "Cache-Control", "max-age=2592000, public");  // Cache for 30 days
-
-    esp_err_t res = httpd_resp_send(req, (const char*)favicon_png_start, favicon_png_end - favicon_png_start);
-    if (res != ESP_OK) {
-        ESP_LOGE("FAVICON", "Failed to send favicon");
-        return res;
-    }
-    return ESP_OK;
+    return SendAsset(req, "image/png", favicon_png_start, favicon_png_end, false);
 }
 
 void NetworkConsolePostConnectCallback(WebSocketServer* ws_server, int client_fd) {
@@ -845,7 +828,7 @@ bool ADSBeeServer::TCPServerInit() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = kHTTPServerStackSizeBytes;
     // config.task_caps = MALLOC_CAP_IRAM_8BIT;
-    config.max_open_sockets = 8;
+    config.max_open_sockets = 10;
     // 8 URIs are registered below (5 HTTP + 3 websocket); the default limit is 8 and a
     // failed registration aborts boot via ESP_ERROR_CHECK.
     config.max_uri_handlers = 16;
