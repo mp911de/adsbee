@@ -56,17 +56,21 @@ idf_component_register(
         "remote_id"
         "server"
         "target_test"
-    # EMBED_FILES keeps the web files at their exact length, which is what the server sends. EMBED_TXTFILES would append
-    # a NUL terminator that then reached the browser.
+    # EMBED_FILES keeps the file at its exact length, which is what the server sends. EMBED_TXTFILES would append a
+    # NUL terminator that then reached the browser. Text assets are gzipped below.
     EMBED_FILES
-        "server/web/index.html"
-        "server/web/style.css"
-        "server/web/adsbee.js"
-        "server/web/settings.js"
-        "server/web/ota_updater.js"
-        "server/web/firmware_release.js"
         "server/web/favicon.png"
 )
+
+# Text web assets are served pre-compressed (Content-Encoding: gzip), roughly a quarter of the flash and airtime.
+set(WEB_GZ_DIR "${CMAKE_CURRENT_BINARY_DIR}/web")
+file(MAKE_DIRECTORY "${WEB_GZ_DIR}")
+foreach(asset index.html adsbee.js settings.js ota_updater.js firmware_release.js)
+    set(src "${CMAKE_CURRENT_SOURCE_DIR}/server/web/${asset}")
+    set(gz "${WEB_GZ_DIR}/${asset}.gz")
+    add_custom_command(OUTPUT "${gz}" COMMAND gzip -9 -n -c "${src}" > "${gz}" DEPENDS "${src}" VERBATIM)
+    target_add_binary_data(${COMPONENT_LIB} "${gz}" BINARY DEPENDS "${gz}")
+endforeach()
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-packed-bitfield-compat)
 

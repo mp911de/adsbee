@@ -61,19 +61,17 @@ static void PrintSettingsWithoutSecrets() {
 }
 /* end obsolete */
 
-// Embedded files from the web folder.
-extern const uint8_t index_html_start[] asm("_binary_index_html_start");
-extern const uint8_t index_html_end[] asm("_binary_index_html_end");
-extern const uint8_t style_css_start[] asm("_binary_style_css_start");
-extern const uint8_t style_css_end[] asm("_binary_style_css_end");
-extern const uint8_t adsbee_js_start[] asm("_binary_adsbee_js_start");
-extern const uint8_t adsbee_js_end[] asm("_binary_adsbee_js_end");
-extern const uint8_t settings_js_start[] asm("_binary_settings_js_start");
-extern const uint8_t settings_js_end[] asm("_binary_settings_js_end");
-extern const uint8_t ota_updater_js_start[] asm("_binary_ota_updater_js_start");
-extern const uint8_t ota_updater_js_end[] asm("_binary_ota_updater_js_end");
-extern const uint8_t firmware_release_js_start[] asm("_binary_firmware_release_js_start");
-extern const uint8_t firmware_release_js_end[] asm("_binary_firmware_release_js_end");
+// Embedded files from the web folder. Text assets are gzipped at build time (main/CMakeLists.txt).
+extern const uint8_t index_html_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_end[] asm("_binary_index_html_gz_end");
+extern const uint8_t adsbee_js_start[] asm("_binary_adsbee_js_gz_start");
+extern const uint8_t adsbee_js_end[] asm("_binary_adsbee_js_gz_end");
+extern const uint8_t settings_js_start[] asm("_binary_settings_js_gz_start");
+extern const uint8_t settings_js_end[] asm("_binary_settings_js_gz_end");
+extern const uint8_t ota_updater_js_start[] asm("_binary_ota_updater_js_gz_start");
+extern const uint8_t ota_updater_js_end[] asm("_binary_ota_updater_js_gz_end");
+extern const uint8_t firmware_release_js_start[] asm("_binary_firmware_release_js_gz_start");
+extern const uint8_t firmware_release_js_end[] asm("_binary_firmware_release_js_gz_end");
 extern const uint8_t favicon_png_start[] asm("_binary_favicon_png_start");
 extern const uint8_t favicon_png_end[] asm("_binary_favicon_png_end");
 
@@ -857,16 +855,6 @@ bool ADSBeeServer::TCPServerInit() {
                         .handle_ws_control_frames = false,
                         .supported_subprotocol = nullptr};
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root));
-
-    // CSS URI handler
-    httpd_uri_t css = {.uri = "/style.css",
-                       .method = HTTP_GET,
-                       .handler = css_handler,
-                       .user_ctx = NULL,
-                       .is_websocket = false,
-                       .handle_ws_control_frames = false,
-                       .supported_subprotocol = nullptr};
-    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &css));
 
     // JavaScript library URI handler
     httpd_uri_t adsbee_js = {.uri = "/adsbee.js",
