@@ -78,6 +78,7 @@ class ObjectDictionary {
         kAddrDeviceIdentity = 0x14,  // SettingsManager::DeviceIdentity, RP2040 to ESP32 on request.
         kAddrESP32FirmwareHash = 0x15,  // SHA-256 of the running ESP32 application (see ESP32FirmwareCheck).
         kAddrFlarmPackets = 0x14,  // Local CC1312 -> RP2040 safety traffic only.
+        kAddrFlarmTargets = 0x15,  // Resolved RP2040 -> ESP32 target snapshot.
         kNumAddrs
     };
 

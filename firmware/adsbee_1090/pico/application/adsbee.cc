@@ -1005,6 +1005,12 @@ void ADSBee::PruneAircraftDictionary() {
             // Send fresh aircraft dictionary stats to ESPS32.
             esp32.Write(ObjectDictionary::kAddrAircraftDictionaryMetrics, aircraft_dictionary.metrics,
                         true);  // require ACK.
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+            static FlarmSnapshot snapshot;
+            flarm_traffic.SetAddressReservations(aircraft_dictionary, get_time_since_boot_ms());
+            flarm_traffic.MakeSnapshot(snapshot, get_time_since_boot_ms());
+            esp32.Write(ObjectDictionary::kAddrFlarmTargets, snapshot, true);
+#endif
         }
         UpdateTLLearning(aircraft_dictionary.metrics.valid_squitter_frames +
                          aircraft_dictionary.metrics.valid_extended_squitter_frames);
