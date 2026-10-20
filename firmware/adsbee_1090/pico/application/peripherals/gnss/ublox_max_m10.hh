@@ -28,7 +28,7 @@ class UbloxMAXM10 : public GNSSReceiver {
 
     // M10 factory default, used to recover a module that does not answer at the configured rate.
     static constexpr uint32_t kSafeBaudrate = 9600;
-    static constexpr uint32_t kBaudrateSwitchSettleMs = 50;
+    static constexpr uint32_t kBaudrateSwitchSettleMs = 100;  // Integration manual: about 100 ms before input at the new rate.
 
     // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults). 
     static constexpr uint32_t kInitConfigBudgetMs = 10000;
