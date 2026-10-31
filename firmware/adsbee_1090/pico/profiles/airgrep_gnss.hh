@@ -9,21 +9,30 @@ struct GNSSMessageRate {
     uint8_t rate;
 };
 
+// Antenna supervisor wiring of the airgrep carrier rev A: open detect comparator on SDA (PIO 2), short sense on SCL
+// (PIO 3), supply switched by LNA_EN.
+inline constexpr uint8_t AIRGREP_REV_A_ANT_OPEN_PIN = 2;
+inline constexpr uint8_t AIRGREP_REV_A_ANT_SHORT_PIN = 3;
+// The first eight entries quiet UART1 before the remaining message rates are applied.
+inline constexpr uint8_t kBootstrapMessageCount = 8;
+
 // UART1 output selection for M10 SPG 5.10. Rejected disabled outputs are optional.
 inline constexpr GNSSMessageRate kGNSSMessages[] = {
+    {0x209100bb, 1},  // NMEA_ID_GGA
+    {0x209100ac, 1},  // NMEA_ID_RMC
+    {0x209100c0, 0},  // NMEA_ID_GSA
+    {0x209100c5, 0},  // NMEA_ID_GSV
+    {0x209100ca, 0},  // NMEA_ID_GLL
+    {0x209100b1, 0},  // NMEA_ID_VTG
+    {0x2091035a, 5},  // UBX_MON_RF
+    {0x20910016, 0},  // UBX_NAV_SAT
     {0x209100a7, 0},  // NMEA_ID_DTM
     {0x209100de, 0},  // NMEA_ID_GBS
-    {0x209100bb, 1},  // NMEA_ID_GGA
-    {0x209100ca, 0},  // NMEA_ID_GLL
     {0x209100b6, 0},  // NMEA_ID_GNS
     {0x209100cf, 0},  // NMEA_ID_GRS
-    {0x209100c0, 0},  // NMEA_ID_GSA
     {0x209100d4, 0},  // NMEA_ID_GST
-    {0x209100c5, 0},  // NMEA_ID_GSV
     {0x20910401, 0},  // NMEA_ID_RLM
-    {0x209100ac, 1},  // NMEA_ID_RMC
     {0x209100e8, 0},  // NMEA_ID_VLW
-    {0x209100b1, 0},  // NMEA_ID_VTG
     {0x209100d9, 0},  // NMEA_ID_ZDA
     {0x209100ed, 0},  // PUBX_ID_POLYP
     {0x209100f2, 0},  // PUBX_ID_POLYS
@@ -34,7 +43,6 @@ inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x209101b5, 0},  // UBX_MON_HW
     {0x209101a6, 0},  // UBX_MON_IO
     {0x20910197, 0},  // UBX_MON_MSGPP
-    {0x2091035a, 0},  // UBX_MON_RF
     {0x209101a1, 0},  // UBX_MON_RXBUF
     {0x20910188, 0},  // UBX_MON_RXR
     {0x2091038c, 0},  // UBX_MON_SPAN
@@ -50,8 +58,7 @@ inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x20910025, 0},  // UBX_NAV_POSECEF
     {0x2091002a, 0},  // UBX_NAV_POSLLH
     {0x20910007, 0},  // UBX_NAV_PVT
-    {0x20910016, 0},  // UBX_NAV_SAT
-    {0x2091006b, 0},  // UBX_NAV_SBAS
+    {0x2091006b, 5},  // UBX_NAV_SBAS
     {0x20910346, 0},  // UBX_NAV_SIG
     {0x20910337, 0},  // UBX_NAV_SLAS
     {0x2091001b, 0},  // UBX_NAV_STATUS

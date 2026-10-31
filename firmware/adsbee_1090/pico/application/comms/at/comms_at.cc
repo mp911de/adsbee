@@ -361,14 +361,16 @@ CPP_AT_CALLBACK(CommsManager::ATFeedEnableCallback) {
 CPP_AT_CALLBACK(CommsManager::ATGNSSCallback) {
     switch (op) {
         case '?':
-            CPP_AT_CMD_PRINTF("=%d,%s,%d", settings_manager.settings.gnss_enabled,
+            CPP_AT_CMD_PRINTF("=%d,%s,%d,%d,%s", settings_manager.settings.gnss_enabled,
                               GNSSModuleTypeToStr(SettingsToGNSSModuleType(settings_manager.settings.gnss_receiver_type)),
-                              settings_manager.settings.gnss_notify);
+                              settings_manager.settings.gnss_notify, settings_manager.settings.gnss_diagnostics,
+                              SettingsManager::GNSSAntennaModeToStr(settings_manager.settings.gnss_antenna));
             CPP_AT_SILENT_SUCCESS();
             break;
         case '=': {
             if (!CPP_AT_HAS_ARG(0)) {
-                CPP_AT_ERROR("Requires AT+GNSS=<0|1>[,<NONE|GENERIC|UBX_MIA>[,<0|1>]].");
+                CPP_AT_ERROR(
+                    "Requires AT+GNSS=<0|1>[,<NONE|GENERIC|UBX_MIA>[,<notify>[,<diagnostics>[,<antenna>]]]].");
             }
 
             bool enabled;
@@ -409,6 +411,21 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSCallback) {
                 }
             }
 
+            bool diagnostics = settings_manager.settings.gnss_diagnostics;
+            if (CPP_AT_HAS_ARG(3)) {
+                if (args[3] != "0" && args[3] != "1") CPP_AT_ERROR("GNSS diagnostics must be 0 or 1.");
+                diagnostics = args[3] == "1";
+            }
+            settings_manager.settings.gnss_diagnostics = diagnostics;
+            if (CPP_AT_HAS_ARG(4)) {
+                uint8_t mode = 0;
+                while (mode < SettingsManager::kNumGNSSAntennaModes &&
+                       args[4].compare(SettingsManager::kGNSSAntennaModeStrs[mode]) != 0)
+                    mode++;
+                if (mode == SettingsManager::kNumGNSSAntennaModes)
+                    CPP_AT_ERROR("GNSS antenna must be UNKNOWN, PASSIVE, ACTIVE, or ACTIVE_SUPERVISED.");
+                settings_manager.settings.gnss_antenna = static_cast<SettingsManager::GNSSAntennaMode>(mode);
+            }
             if (!ConfigureGNSSReceiver(enabled, type)) {
                 settings_manager.settings.gnss_enabled = enabled;
                 settings_manager.settings.gnss_receiver_type = GNSSModuleTypeToSettings(type);
@@ -440,10 +457,71 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
     if (gnss->GetUTCUnixMs(utc_unix_ms)) {
         snprintf(utc_epoch, sizeof(utc_epoch), "%llu", static_cast<unsigned long long>(utc_unix_ms));
     }
-    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s", gnss->HasValidFix(), fix.latitude_deg,
+    const char* antenna = "UNKNOWN";
+    const char* sbas = "UNKNOWN";
+    int corrected = 0, prc_cm = -1, ic_cm = -1;
+    if (UbloxMAXM10* m10 = gnss->M10()) {
+        if (m10->rf().valid) antenna = M10Strings::AntennaStatus(m10->rf().value.antenna_status);
+        if (m10->sbas().valid) {
+            const M10Diagnostics::SbasStatus& status = m10->sbas().value;
+            sbas = status.mode == 0 ? "OFF" : M10Strings::SbasSystem(status.system);
+            corrected = status.count;
+            if (status.count > 0) {
+                prc_cm = status.satellites[0].range_correction_cm;
+                ic_cm = status.satellites[0].ionosphere_correction_cm;
+            }
+        }
+    }
+    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s,%s,%s,%d,%d,%d", gnss->HasValidFix(), fix.latitude_deg,
                       fix.longitude_deg, static_cast<long>(fix.altitude_ft), fix.heading_deg,
                       static_cast<long>(fix.speed_kts), static_cast<unsigned int>(fix.num_satellites), utc_time,
-                      static_cast<unsigned long>(gnss->pps_count()), utc_epoch);
+                      static_cast<unsigned long>(gnss->pps_count()), utc_epoch, antenna, sbas, corrected, prc_cm, ic_cm);
+    CPP_AT_SILENT_SUCCESS();
+}
+
+CPP_AT_CALLBACK(CommsManager::ATGNSSDiagCallback) {
+    if (op != '?') CPP_AT_ERROR("Only AT+GNSS_DIAG? is supported.");
+    UbloxMAXM10* m10 = gnss->M10();
+    if (!m10 || !gnss->IsHealthy()) CPP_AT_ERROR("No M10 module is running.");
+    uint32_t now_ms = get_time_since_boot_ms();
+    if (m10->rf().valid) {
+        const M10Diagnostics::RfStatus& rf = m10->rf().value;
+        CPP_AT_PRINTF("RF: age=%lums jamming=%s antenna=%s power=%s noise=%u agc=%u cw=%u I=%d/%u Q=%d/%u\r\n",
+                          static_cast<unsigned long>(now_ms - m10->rf().received_ms), M10Strings::Jamming(rf.jamming),
+                          M10Strings::AntennaStatus(rf.antenna_status), M10Strings::AntennaPower(rf.antenna_power),
+                          rf.noise, rf.agc, rf.cw_suppression, rf.offset_i, rf.magnitude_i, rf.offset_q,
+                          rf.magnitude_q);
+    }
+    if (m10->sbas().valid) {
+        const M10Diagnostics::SbasStatus& sbas = m10->sbas().value;
+        CPP_AT_PRINTF("SBAS: age=%lums mode=%s system=%s geo=%u service=0x%02X corrected=%u flags=0x%02X\r\n",
+                          static_cast<unsigned long>(now_ms - m10->sbas().received_ms), M10Strings::SbasMode(sbas.mode),
+                          M10Strings::SbasSystem(sbas.system), sbas.geo, sbas.service, sbas.count, sbas.flags);
+        for (uint8_t i = 0; i < sbas.count && i < M10Diagnostics::kStoredSbasSatellites; i++) {
+            const M10Diagnostics::SbasSatellite& sv = sbas.satellites[i];
+            CPP_AT_PRINTF("SBAS:  sv=%u udre=%u sys=%u service=0x%02X prc=%dcm ic=%dcm\r\n", sv.id, sv.udre,
+                              sv.system, sv.service, sv.range_correction_cm, sv.ionosphere_correction_cm);
+        }
+    }
+    M10Diagnostics::CommsStatus comms;
+    if (!m10->PollComms(comms)) CPP_AT_ERROR("MON-COMMS poll failed.");
+    for (uint8_t i = 0; i < comms.count && i < M10Diagnostics::kStoredCommsPorts; i++) {
+        const M10Diagnostics::CommsPort& port = comms.ports[i];
+        CPP_AT_PRINTF("COMMS: txErrors=0x%02X port=%s tx=%luB/%u%%/peak %u%% pending=%u rx=%luB/%u%%/peak %u%% "
+                          "pending=%u overrun=%u ubx=%u nmea=%u rtcm2=%u rtcm3=%u skipped=%lu\r\n",
+                          comms.tx_errors, M10Strings::Port(port.id), static_cast<unsigned long>(port.tx_bytes),
+                          port.tx_usage, port.tx_peak_usage, port.tx_pending, static_cast<unsigned long>(port.rx_bytes),
+                          port.rx_usage, port.rx_peak_usage, port.rx_pending, port.overrun_errors, port.messages[0],
+                          port.messages[1], port.messages[2], port.messages[3],
+                          static_cast<unsigned long>(port.skipped_bytes));
+    }
+    M10Diagnostics::Hw3Status hw3;
+    if (!m10->PollHw3(hw3)) CPP_AT_ERROR("MON-HW3 poll failed.");
+    CPP_AT_PRINTF("HW3: flags=0x%02X hw=%s pins=%u\r\n", hw3.flags, hw3.hardware_version, hw3.count);
+    for (uint8_t i = 0; i < hw3.count && i < M10Diagnostics::kStoredHw3Pins; i++) {
+        CPP_AT_PRINTF("HW3:  pin=%u mask=0x%04X virtual=%u\r\n", hw3.pins[i].id, hw3.pins[i].mask,
+                          hw3.pins[i].virtual_pin);
+    }
     CPP_AT_SILENT_SUCCESS();
 }
 
@@ -1066,6 +1144,7 @@ CPP_AT_CALLBACK(CommsManager::ATFeedCallback) {
                 if (i == SettingsManager::ReportingProtocol::kNumProtocols) {
                     CPP_AT_ERROR("Unknown protocol '%.*s'.", (int)args[4].length(), args[4].data());
                 }
+                if (i == SettingsManager::kAirgrep) CPP_AT_ERROR("AIRGREP is a serial output protocol.");
                 feed_protocol = static_cast<SettingsManager::ReportingProtocol>(i);
             }
             SettingsManager::FeedTransport feed_transport = s.feed_transports[index];
@@ -2110,8 +2189,9 @@ static void PrintSettingsJSON() {
         CPP_AT_PRINTF("\"SWARM\":[%d,\"%s\",\"%s\"],", s.swarm_enabled, JSONEscapeStr(s.swarm_server, esc, sizeof(esc)),
                       masked);
     }
-    CPP_AT_PRINTF("\"GNSS\":[%d,\"%s\",%d],", s.gnss_enabled,
-                  GNSSModuleTypeToStr(SettingsToGNSSModuleType(s.gnss_receiver_type)), s.gnss_notify);
+    CPP_AT_PRINTF("\"GNSS\":[%d,\"%s\",%d,%d,\"%s\"],", s.gnss_enabled,
+                  GNSSModuleTypeToStr(SettingsToGNSSModuleType(s.gnss_receiver_type)), s.gnss_notify, s.gnss_diagnostics,
+                  SettingsManager::GNSSAntennaModeToStr(s.gnss_antenna));
     CPP_AT_PRINTF("\"HOSTNAME\":[\"%s\"],", JSONEscapeStr(cns.hostname, esc, sizeof(esc)));
     CPP_AT_PRINTF("\"IP_MODE\":[\"%s\"],", SettingsManager::IPModeToStr(s.ip_mode));
     CPP_AT_PRINTF("\"LED_ENABLE\":[%d],", s.led_enabled);
@@ -2645,21 +2725,32 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATSwarmCallback, comms_manager)},
     {.command = "GNSS",
      .min_args = 0,
-     .max_args = 3,
-     .help_string = "AT+GNSS=enable: <0|1>[, type: <NONE|GENERIC|UBX_MIA>[,notify: <0|1>]]\r\n\tEnable or disable GNSS power, optionally "
+     .max_args = 5,
+     .help_string = "AT+GNSS=<enable>[,<type>[,<notify>[,<diagnostics>[,<antenna>]]]]\r\n\tEnable or disable GNSS power, optionally "
                     "select the GNSS type, and enable GNSS_FIX log messages for when the GNSS fix becomes valid or invalid. Notify defaults to off. "
-                    "Notifications are INFO-level log messages: they only appear on the console with AT+LOG_LEVEL=INFO. "
+                    "Notifications require AT+LOG_LEVEL=INFO. Diagnostics enables five-second M10 RF reports and errors/warnings for AIRGREP output. "
+                    "Diagnostics defaults to off; omitting it preserves the saved setting. "
                     "Poll AT+GNSS_FIX? to read the fix programmatically. "
-                    "Type is optional, when not present the last configured type is reused, default is NONE; GNSS cannot be enabled while the saved type is NONE."
-                    "\r\n\tAT+GNSS?\r\n\tQuery the GNSS system state, type, and notification setting",
+                    "Type is optional, when not present the last configured type is reused, default is NONE; GNSS cannot be enabled while the saved type is NONE. "
+                    "Antenna is UNKNOWN (default), PASSIVE, ACTIVE or ACTIVE_SUPERVISED; ACTIVE_SUPERVISED turns on the M10 antenna "
+                    "supervisor on boards wired for it. Omitting it preserves the saved setting."
+                    "\r\n\tAT+GNSS?\r\n\tQuery the GNSS system state, type, notification, diagnostics and antenna settings",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSCallback, comms_manager)},
     {.command = "GNSS_FIX",
      .min_args = 0,
      .max_args = 0,
      .help_string = "AT+GNSS_FIX?\r\n\tReturn fix validity, latitude and longitude in degrees, altitude in feet, "
-                    "heading in degrees true, groundspeed in knots, active satellites, UTC time, and PPS count "
-                    "since the last GNSS enable or disable operation.",
+                    "heading in degrees true, groundspeed in knots, active satellites, UTC time, PPS count "
+                    "since the last GNSS enable or disable operation, UTC epoch in ms, antenna status, SBAS system, "
+                    "satellites with SBAS corrections, and the first satellite's pseudorange and ionosphere corrections "
+                    "in cm (-1 when none). Antenna and SBAS fields come from the M10 and read UNKNOWN elsewhere.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSFixCallback, comms_manager)},
+    {.command = "GNSS_DIAG",
+     .min_args = 0,
+     .max_args = 0,
+     .help_string = "AT+GNSS_DIAG?\r\n\tPrint the latest M10 RF and SBAS records with their age, then poll MON-COMMS "
+                    "and MON-HW3 from the module. For people, not for parsing.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSDiagCallback, comms_manager)},
     {.command = "HOSTNAME",
      .min_args = 0,
      .max_args = 1,

@@ -5,6 +5,7 @@
 #include "comms.hh"             // For comms_manager (UART I/O + baud) and CONSOLE_* logging.
 #include "cpu_utils.hh"
 #include "hal.hh"               // For get_time_since_boot_ms().
+#include "m10_telemetry.hh"
 
 void GNSSReceiver::ParkTx() {
     gpio_set_dir(config_.uart_tx_pin, GPIO_IN);
@@ -96,6 +97,7 @@ bool GNSSReceiver::Update() {
     if (!active_) return true;
 
     uint32_t now_ms = get_time_since_boot_ms();
+    if (auto* telemetry = Telemetry()) telemetry->SetEnabled(settings_manager.settings.gnss_diagnostics);
     // SendInitCommands() may parse NMEA received during its probe, so establish the timestamp
     // before initialization as well as before the normal UART drain below.
     parser_.SetTimestampMs(now_ms);
@@ -177,10 +179,9 @@ bool GNSSReceiver::Update() {
     char c;
     while (ReadBufferedByte(c)) {
         CPUMonitor::WorkScope work;
+        IngestModuleByte(static_cast<uint8_t>(c), now_ms);
         NMEAParser::SentenceType result = parser_.IngestByte(c);
         if (result == NMEAParser::kSentenceRMC) LabelPPSEdge();
-        // TEMPORARY: also feed the byte to the receiver-specific binary sniffer (UBX for ublox).
-        DebugIngestByte(c);
         // TEMPORARY debug instrumentation (remove once root cause found).
         debug_total_rx_bytes_++;
         if (result != NMEAParser::kSentenceNone) {
@@ -249,6 +250,7 @@ bool GNSSReceiver::Update() {
 }
 
 void GNSSReceiver::SuspendForUartHandover() {
+    DiscardModuleStream();
     // Nothing to park if the module never came up: its pins aren't driving UART0 with real traffic,
     // and skipping avoids stalling the flash path on boards with no GNSS.
     if (!active_ || suspended_) return;
@@ -281,6 +283,7 @@ void GNSSReceiver::ResumeAfterUartHandover() {
 }
 
 void GNSSReceiver::SetEnable(bool enabled) {
+    DiscardModuleStream();
     if (module_type_ == BSP::kGNSSModuleUbloxMAXM10) {
         if (!enabled) {
             ParkTx();

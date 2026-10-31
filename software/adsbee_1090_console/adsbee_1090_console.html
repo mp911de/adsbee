@@ -5432,7 +5432,7 @@ class SettingsEngine {
 // Constants and schema-entry factories for AT commands shared by both products.
 
 const SETTINGS_PROTOCOLS = ['NONE', 'RAW', 'BEAST', 'BEAST_NO_UAT', 'BEAST_NO_UAT_UPLINK', 'CSBEE',
-    'MAVLINK1', 'MAVLINK2', 'GDL90', 'AIRCRAFT_JSON', 'GDL90_NO_UAT_UPLINK', 'AIRCRAFT_JSON_UAT_UPLINK', 'ASTERIX'];
+    'MAVLINK1', 'MAVLINK2', 'GDL90', 'AIRCRAFT_JSON', 'GDL90_NO_UAT_UPLINK', 'AIRCRAFT_JSON_UAT_UPLINK', 'ASTERIX', 'AIRGREP'];
 const SETTINGS_LOG_LEVELS = ['SILENT', 'ERRORS', 'WARNINGS', 'INFO'];
 
 // RX_POSITION is identical on both products; the entry is built by a factory so each
@@ -8759,6 +8759,8 @@ const SETTINGS_SCHEMA_1090 = [
             { id: 'en', label: 'Enabled', type: 'bool' },
             { id: 'type', label: 'Receiver Type', type: 'enum', options: ['NONE', 'GENERIC', 'UBX_MIA'] },
             { id: 'notify', label: 'Print fix notifications', type: 'bool' },
+            { id: 'diagnostics', label: 'M10 diagnostic telemetry', type: 'bool' },
+            { id: 'antenna', label: 'Antenna', type: 'enum', options: ['UNKNOWN', 'PASSIVE', 'ACTIVE', 'ACTIVE_SUPERVISED'] },
         ],
     },
     // ── Remote ID ──

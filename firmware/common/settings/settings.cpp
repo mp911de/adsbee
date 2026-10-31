@@ -83,6 +83,7 @@ bool SettingsManager::Sanitize() {
     changed |= SanitizeBool(settings.feeds_enabled, "feeds_enabled");
     changed |= SanitizeBool(settings.gnss_enabled, "gnss_enabled");
     changed |= SanitizeBool(settings.gnss_notify, "gnss_notify");
+    changed |= SanitizeBool(settings.gnss_diagnostics, "gnss_diagnostics");
     changed |= SanitizeBool(settings.subg_rx_enabled, "subg_rx_enabled");
     changed |= SanitizeBool(settings.subg_bias_tee_enabled, "subg_bias_tee_enabled");
     changed |= SanitizeBool(settings.remote_id_rx_enabled, "remote_id_rx_enabled");
@@ -183,7 +184,7 @@ bool SettingsManager::Sanitize() {
         }
     }
     for (uint16_t i = 0; i < Settings::kMaxNumFeeds; i++) {
-        if (settings.feed_protocols[i] >= ReportingProtocol::kNumProtocols) {
+        if (settings.feed_protocols[i] >= ReportingProtocol::kNumProtocols || settings.feed_protocols[i] == kAirgrep) {
             CONSOLE_ERROR("SettingsManager::Sanitize", "feed_protocols[%u]=%u out of range, resetting to kNoReports.",
                           i, settings.feed_protocols[i]);
             settings.feed_protocols[i] = ReportingProtocol::kNoReports;
@@ -211,6 +212,12 @@ bool SettingsManager::Sanitize() {
         CONSOLE_ERROR("SettingsManager::Sanitize", "gnss_receiver_type %u out of range, resetting to kGNSSReceiverNone.",
                       settings.gnss_receiver_type);
         settings.gnss_receiver_type = kGNSSReceiverNone;
+        changed = true;
+    }
+    if (settings.gnss_antenna >= kNumGNSSAntennaModes) {
+        CONSOLE_ERROR("SettingsManager::Sanitize", "gnss_antenna %u out of range, resetting to UNKNOWN.",
+                      settings.gnss_antenna);
+        settings.gnss_antenna = kGNSSAntennaUnknown;
         changed = true;
     }
     // GNSS can't run without a receiver type (AT+GNSS refuses it too).
@@ -267,11 +274,15 @@ void SettingsManager::Print() {
                               settings.led_enabled ? "ENABLED" : "DISABLED");
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len, "\tNetwork Feeds: %s\r\n",
                               settings.feeds_enabled ? "ENABLED" : "DISABLED");
+    CONSOLE_PRINTF("%s", print_buf);
+    print_buf_len = 0;
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
-                              "\tGNSS: %s (%s), fix notifications: %s\r\n",
+                              "\tGNSS: %s (%s), fix notifications: %s, diagnostics: %s, antenna: %s\r\n",
                               settings.gnss_enabled ? "ENABLED" : "DISABLED",
                               GNSSReceiverTypeToStr(settings.gnss_receiver_type),
-                              settings.gnss_notify ? "ENABLED" : "DISABLED");
+                              settings.gnss_notify ? "ENABLED" : "DISABLED",
+                              settings.gnss_diagnostics ? "ENABLED" : "DISABLED",
+                              GNSSAntennaModeToStr(settings.gnss_antenna));
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len, "\tLog Level: %s\r\n",
                               kConsoleLogLevelStrs[settings.log_level]);
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
@@ -424,8 +435,9 @@ void SettingsManager::PrintAT() {
     CONSOLE_PRINTF("AT+FEED_ENABLE=%d\r\n", settings.feeds_enabled);
 
     // AT+GNSS
-    CONSOLE_PRINTF("AT+GNSS=%d,%s,%d\r\n", settings.gnss_enabled,
-                   GNSSReceiverTypeToStr(settings.gnss_receiver_type), settings.gnss_notify);
+    CONSOLE_PRINTF("AT+GNSS=%d,%s,%d,%d,%s\r\n", settings.gnss_enabled,
+                   GNSSReceiverTypeToStr(settings.gnss_receiver_type), settings.gnss_notify, settings.gnss_diagnostics,
+                   GNSSAntennaModeToStr(settings.gnss_antenna));
 
     // AT+LOG_LEVEL
     CONSOLE_PRINTF("AT+LOG_LEVEL=%s\r\n", kConsoleLogLevelStrs[settings.log_level]);

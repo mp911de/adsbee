@@ -314,6 +314,44 @@ TEST(SettingsMigration, V15ToCurrentPreservesAllFieldsAndAddsEmptyWiFiNetworks) 
     }
 }
 
+TEST(SettingsManager, AirgrepIsSerialOnlyAndDiagnosticsDefaultsOff) {
+    settings_manager.settings = SettingsManager::Settings();
+    auto& s = settings_manager.settings;
+    EXPECT_FALSE(s.gnss_diagnostics);
+    s.reporting_protocols[SettingsManager::kCommsUART] = SettingsManager::kAirgrep;
+    s.feed_protocols[0] = SettingsManager::kAirgrep;
+    settings_manager.Sanitize();
+    EXPECT_EQ(s.reporting_protocols[SettingsManager::kCommsUART], SettingsManager::kAirgrep);
+    EXPECT_EQ(s.feed_protocols[0], SettingsManager::kNoReports);
+}
+
+TEST(SettingsMigration, V17PreservesSettingsAndDoesNotInterpretOldPaddingAsDiagnostics) {
+    settings_v17::Settings old{};
+    old.settings_version = 17;
+    old.gnss_enabled = true;
+    old.gnss_receiver_type = SettingsManager::kGNSSReceiverUBXMIA;
+    old.reporting_protocols[1] = SettingsManager::kCSBee;
+    old.baud_rates[2] = 38400;
+    strcpy(old.wifi_sta_extra_networks[1].ssid, "second-network");
+    strcpy(old.wifi_sta_extra_networks[1].password, "preserve-this");
+    uint8_t blob[sizeof(old)];
+    memcpy(blob, &old, sizeof(old));
+    blob[265] = 0xFF;
+    SettingsManager::Settings out;
+    ASSERT_TRUE(SettingsMigrator::Migrate(blob, sizeof(blob), 17, out));
+    EXPECT_FALSE(out.gnss_diagnostics);
+    EXPECT_TRUE(out.gnss_enabled);
+    EXPECT_EQ(out.baud_rates[2], 38400u);
+    EXPECT_STREQ(out.wifi_sta_extra_networks[1].ssid, "second-network");
+    EXPECT_STREQ(out.wifi_sta_extra_networks[1].password, "preserve-this");
+    EXPECT_EQ(out.settings_version, kSettingsVersion);
+    EXPECT_EQ(out.gnss_antenna, SettingsManager::kGNSSAntennaUnknown);
+    EXPECT_EQ(out.gnss_receiver_type, SettingsManager::kGNSSReceiverUBXMIA);
+    EXPECT_EQ(out.reporting_protocols[1], SettingsManager::kCSBee);
+    EXPECT_EQ(out.log_level, SettingsManager::LogLevel::kSilent);
+    EXPECT_FALSE(SettingsMigrator::Migrate(blob, sizeof(blob) - 1, 17, out));
+}
+
 TEST(SettingsMigration, V17ToV18KeepsWiFiNetworksAndLeavesAutoUpdateOff) {
     settings_v15::Settings v15;
     PopulateV15(v15);
@@ -465,6 +503,37 @@ TEST(Settings, AltitudeFilterDefaultsOffAndRoundTrips) {
         EXPECT_EQ(manager.settings.filter_altitude_a_ft, 0);
         EXPECT_EQ(manager.settings.filter_altitude_b_ft, 10000);
     }
+}
+
+TEST(SettingsMigration, V19ToV20ShiftsLogLevelAndDefaultsGNSSAntenna) {
+    settings_v19::Settings v19{};
+    v19.settings_version = 19;
+    v19.gnss_enabled = true;
+    v19.gnss_notify = true;
+    v19.log_level = SettingsManager::LogLevel::kInfo;
+    v19.reporting_protocols[1] = SettingsManager::kCSBee;
+    v19.baud_rates[2] = 38400;
+    v19.feed_transports[3] = SettingsManager::kFeedTransportUDP;
+    v19.swarm_enabled = true;
+    strcpy(v19.swarm_token, "token");
+    strcpy(v19.ntp_server, "time.example");
+    uint8_t blob[sizeof(v19)];
+    memcpy(blob, &v19, sizeof(v19));
+    SettingsManager::Settings out;
+    ASSERT_TRUE(SettingsMigrator::Migrate(blob, sizeof(blob), 19, out));
+    EXPECT_EQ(out.settings_version, kSettingsVersion);
+    EXPECT_TRUE(out.gnss_enabled);
+    EXPECT_TRUE(out.gnss_notify);
+    EXPECT_FALSE(out.gnss_diagnostics);
+    EXPECT_EQ(out.gnss_antenna, SettingsManager::kGNSSAntennaUnknown);
+    EXPECT_EQ(out.log_level, SettingsManager::LogLevel::kInfo);
+    EXPECT_EQ(out.reporting_protocols[1], SettingsManager::kCSBee);
+    EXPECT_EQ(out.baud_rates[2], 38400u);
+    EXPECT_EQ(out.feed_transports[3], SettingsManager::kFeedTransportUDP);
+    EXPECT_TRUE(out.swarm_enabled);
+    EXPECT_STREQ(out.swarm_token, "token");
+    EXPECT_STREQ(out.ntp_server, "time.example");
+    EXPECT_FALSE(SettingsMigrator::Migrate(blob, sizeof(blob) - 1, 19, out));
 }
 
 TEST(SettingsMigration, V18ToCurrentKeepsFeedsOnTCP) {

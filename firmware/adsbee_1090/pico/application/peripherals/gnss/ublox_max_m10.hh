@@ -1,6 +1,9 @@
 #pragma once
 
 #include "gnss_receiver.hh"
+#include "hal.hh"  // For get_time_since_boot_ms().
+#include "m10_telemetry.hh"
+#include "ubx_parser.hh"
 #ifdef AIRGREP
 #include "../../../profiles/airgrep_gnss.hh"
 #endif
@@ -16,7 +19,7 @@
  *     known-good baseline (V_BCKP is an always-on battery-derived rail, so BBR persists), then
  *     applies the application-specific overrides we need (e.g. enabling GGA/RMC output).
  */
-class UbloxMAXM10 : public GNSSReceiver {
+class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M10Diagnostics::Listener {
    public:
     // Settle floor after power-on before we start probing. u-blox does not publish a fixed
     // Vcc-to-UART-ready time for the M10 (only TTFF, which is fix time, not UART readiness)
@@ -34,8 +37,6 @@ class UbloxMAXM10 : public GNSSReceiver {
     static constexpr uint32_t kInitConfigBudgetMs = 10000;
 
     // UBX protocol constants.
-    static constexpr uint8_t kUbxSync1 = 0xB5;
-    static constexpr uint8_t kUbxSync2 = 0x62;
     static constexpr uint8_t kUbxClassCfg = 0x06;
     static constexpr uint8_t kUbxClassAck = 0x05;
     static constexpr uint8_t kUbxClassMon = 0x0A;
@@ -43,6 +44,8 @@ class UbloxMAXM10 : public GNSSReceiver {
     static constexpr uint8_t kUbxIdCfgValset = 0x8A;
     static constexpr uint8_t kUbxIdCfgValget = 0x8B;
     static constexpr uint8_t kUbxIdMonVer = 0x04;
+    static constexpr uint8_t kUbxIdMonComms = 0x36;
+    static constexpr uint8_t kUbxIdMonHw3 = 0x37;
     static constexpr uint8_t kUbxIdMonRf = 0x38;   // UBX-MON-RF: per-RF-block antenna/AGC/noise status.
     static constexpr uint8_t kUbxIdNavSat = 0x35;  // UBX-NAV-SAT: per-satellite C/N0 + count.
     static constexpr uint8_t kUbxIdAckAck = 0x01;
@@ -70,12 +73,42 @@ class UbloxMAXM10 : public GNSSReceiver {
     static constexpr uint32_t kCfgMsgoutNmeaVtgUart1 = 0x209100b1;     // U1
     static constexpr uint32_t kCfgNmeaProtver = 0x20930001;            // E1
     static constexpr uint32_t kCfgAnaUseAna = 0x10230001;             // L: AssistNow Autonomous enable
-    // TEMPORARY diagnostic: periodic UBX status output on UART1 (remove with the rest of the GNSS
-    // debug instrumentation).
-    static constexpr uint32_t kCfgMsgoutUbxMonRfUart1 = 0x2091035a;   // U1
+    static constexpr uint32_t kCfgInfmsgUbxUart1 = 0x20920002;
+    static constexpr uint32_t kCfgRateMeas = 0x30210001;
+    static constexpr uint32_t kCfgRateNav = 0x30210002;
+    static constexpr uint32_t kCfgSignalSbas = 0x10310020;
+    static constexpr uint32_t kCfgSignalSbasL1Ca = 0x10310005;
+    static constexpr uint32_t kCfgMsgoutUbxMonRfUart1 = 0x2091035a;    // U1
+    static constexpr uint32_t kCfgMsgoutUbxNavSbasUart1 = 0x2091006b;  // U1
+    static constexpr uint32_t kCfgI2cEnabled = 0x10510003;             // L
+    static constexpr uint32_t kCfgItfmAntSetting = 0x20410010;         // E1: 0 unknown, 1 passive, 2 active
+    static constexpr uint32_t kCfgHwAntCfgVoltCtrl = 0x10a3002e;       // L
+    static constexpr uint32_t kCfgHwAntCfgShortDet = 0x10a3002f;       // L
+    static constexpr uint32_t kCfgHwAntCfgOpenDet = 0x10a30031;        // L
+    static constexpr uint32_t kCfgHwAntSupShortPin = 0x20a30037;       // U1, PIO number
+    static constexpr uint32_t kCfgHwAntSupOpenPin = 0x20a30038;        // U1, PIO number
+    // Diagnostic streams on UART1, every Nth navigation epoch.
+    static constexpr uint8_t kDiagnosticsEpochDivider = 5;
+    // TEMPORARY diagnostic (remove with the rest of the GNSS debug instrumentation).
     static constexpr uint32_t kCfgMsgoutUbxNavSatUart1 = 0x20910016;  // U1
 
+    // The latest record of one diagnostic kind and when it arrived.
+    template <typename T>
+    struct Latest {
+        bool valid = false;
+        uint32_t received_ms = 0;
+        T value;
+    };
+
     UbloxMAXM10(GNSSReceiverConfig config_in) : GNSSReceiver(config_in, BSP::kGNSSModuleUbloxMAXM10) {}
+
+    M10Telemetry* Telemetry() override { return &telemetry_; }
+    UbloxMAXM10* M10() override { return this; }
+    const Latest<M10Diagnostics::RfStatus>& rf() const { return rf_; }
+    const Latest<M10Diagnostics::SbasStatus>& sbas() const { return sbas_; }
+    // Request one MON-COMMS or MON-HW3 record and wait up to kProbeTimeoutMs for it.
+    bool PollComms(M10Diagnostics::CommsStatus& comms);
+    bool PollHw3(M10Diagnostics::Hw3Status& hw3);
 
     /**
      * Set a configuration item via UBX-CFG-VALSET.
@@ -105,6 +138,10 @@ class UbloxMAXM10 : public GNSSReceiver {
     bool CfgValSetE1(uint32_t key, uint8_t v, uint8_t layers) { return CfgValSet(key, v, 1, layers); }
 
    protected:
+    void IngestModuleByte(uint8_t byte, uint32_t now_ms) override { ubx_parser_.IngestByte(byte, now_ms); }
+    void DiscardModuleStream() override;
+    M10Telemetry telemetry_;
+    UbxParser ubx_parser_{*this};
     // Probe/bring up the UART at the user-configured/persisted baud rate, not the module's factory
     // default. Once a module has been configured (its baud persists in battery-backed RAM), it keeps
     // running at whatever rate it was last set to -- using the factory default here instead would
@@ -116,10 +153,8 @@ class UbloxMAXM10 : public GNSSReceiver {
     bool SendInitCommands() override;
     void ResendRuntimeConfig() override;
 
-    // TEMPORARY debug hooks (remove with the rest of the GNSS debug instrumentation):
-    //  - DebugIngestByte: passively sniffs UBX-MON-RF and UBX-NAV-SAT out of the live byte stream.
-    //  - DebugDumpModuleStatus: prints the latest sniffed antenna/RF + satellite snapshot.
-    void DebugIngestByte(char c) override;
+    // TEMPORARY debug hook (remove with the rest of the GNSS debug instrumentation): prints the
+    // latest UBX-MON-RF and UBX-NAV-SAT snapshot.
     void DebugDumpModuleStatus() override;
 
    private:
@@ -127,6 +162,7 @@ class UbloxMAXM10 : public GNSSReceiver {
     static constexpr uint8_t kMessageBatchSize = 32;
     static constexpr uint32_t kMessageReplyTimeoutMs = 500;
     static constexpr uint32_t kBootstrapReplyTimeoutMs = 1500;
+    bool ConfigureAirgrep(uint8_t layers);
     bool ConfigureAirgrepMessages(uint8_t layers);
     bool ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint8_t layers,
                            uint32_t timeout_ms = kMessageReplyTimeoutMs);
@@ -135,11 +171,11 @@ class UbloxMAXM10 : public GNSSReceiver {
     // Build and transmit a raw UBX frame (sync + class/id + length + payload + checksum).
     void SendUbxFrame(uint8_t msg_class, uint8_t msg_id, const uint8_t* payload, uint16_t payload_len);
 
-    // Core UBX receive scanner: reads the incoming byte stream (up to timeout_ms) for a complete UBX
-    // frame matching want_class/want_id, discarding NMEA, non-matching UBX frames, and frames with a
-    // bad Fletcher checksum. Optionally copies up to out_cap payload bytes into out_payload and
-    // reports the true payload length.
+    // Blocking UBX receive: pumps the incoming byte stream (up to timeout_ms) through ubx_parser_
+    // until a frame matching want_class/want_id arrives. Optionally copies up to out_cap payload bytes
+    // into out_payload and reports the true payload length. NMEA and diagnostics keep flowing meanwhile.
     // @param[out] is_ack Optional; for ACK/NAK frames, set true on ACK-ACK and false on ACK-NAK.
+    // @param[out] config_nak Optional; also accepts an ACK/NAK for want_class/want_id and reports NAK.
     // @retval True if a matching frame with a valid checksum arrived before the timeout, false otherwise.
     bool ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_t timeout_ms, uint8_t* out_payload,
                            uint16_t out_cap, uint16_t* out_len, bool* is_ack, bool* config_nak = nullptr);
@@ -173,29 +209,47 @@ class UbloxMAXM10 : public GNSSReceiver {
     // Cheap and idempotent; used both during init and after a UART handover (ResendRuntimeConfig).
     // @param[in] layers CfgLayer bitfield to target.
     void ApplyRuntimeMessageConfig(uint8_t layers);
+#ifndef AIRGREP
+    // MON-RF and NAV-SBAS every kDiagnosticsEpochDivider epochs, INF messages per the diagnostics setting.
+    void ApplyDiagnosticStreams(uint8_t layers);
+#endif
 
-    // ---- TEMPORARY UBX sniffer state (remove with the rest of the GNSS debug instrumentation) ----
-    // Non-blocking, byte-at-a-time UBX frame state machine fed by DebugIngestByte(). It decodes
-    // UBX-MON-RF (antenna/AGC/noise) and UBX-NAV-SAT (numSvs + max C/N0) as they stream by, storing
-    // the latest snapshot for DebugDumpModuleStatus() to print.
-    enum class UbxSniffState : uint8_t { kSync1, kSync2, kClass, kId, kLen1, kLen2, kPayload, kCkA, kCkB };
-    UbxSniffState sniff_state_ = UbxSniffState::kSync1;
-    uint8_t sniff_class_ = 0;
-    uint8_t sniff_id_ = 0;
-    uint16_t sniff_payload_len_ = 0;
-    uint16_t sniff_payload_idx_ = 0;
-    static constexpr uint16_t kSniffBufLen = 32;  // Enough for the fixed MON-RF fields we read.
-    uint8_t sniff_buf_[kSniffBufLen] = {0};       // Captures the leading payload bytes (MON-RF block 0).
-    uint8_t sniff_nav_sat_numsvs_ = 0;            // NAV-SAT numSvs (decoded streaming).
-    uint8_t sniff_nav_sat_max_cno_ = 0;           // NAV-SAT running max C/N0 across SVs (streaming).
+    // One pending ScanForUbxMessage, matched by OnUbxMessage.
+    struct Scan {
+        bool active = false, done = false;
+        uint8_t cls = 0, id = 0;
+        uint8_t* out_payload = nullptr;
+        uint16_t out_cap = 0;
+        uint16_t* out_len = nullptr;
+        bool* is_ack = nullptr;
+        bool* config_nak = nullptr;
+    };
+    Scan scan_;
+    void OnUbxMessage(const UbxMessage& message) override;
+    bool MatchScan(const UbxMessage& message);
 
-    // Latest decoded snapshots (valid_ set true once at least one frame of each type seen).
-    bool mon_rf_valid_ = false;
-    uint8_t mon_rf_jamming_ = 0, mon_rf_ant_status_ = 0, mon_rf_ant_power_ = 0, mon_rf_mag_i_ = 0, mon_rf_mag_q_ = 0;
-    uint16_t mon_rf_noise_ = 0, mon_rf_agc_ = 0;
-    bool nav_sat_valid_ = false;
-    uint8_t nav_sat_numsvs_ = 0, nav_sat_max_cno_ = 0;
+    void OnInfo(bool error, const char* text, uint16_t length, bool truncated) override {
+        telemetry_.OnInfo(error, text, length, truncated);
+    }
+    void OnRf(const M10Diagnostics::RfStatus& rf) override;
+    void OnSbas(const M10Diagnostics::SbasStatus& sbas) override { Store(sbas_, sbas); }
+    void OnComms(const M10Diagnostics::CommsStatus& comms) override { Store(comms_, comms); }
+    void OnHw3(const M10Diagnostics::Hw3Status& hw3) override { Store(hw3_, hw3); }
+    void OnSatellites(const M10Diagnostics::SatelliteSummary& satellites) override { Store(satellites_, satellites); }
+    template <typename T>
+    static void Store(Latest<T>& latest, const T& value) {
+        latest.value = value;
+        latest.received_ms = get_time_since_boot_ms();
+        latest.valid = true;
+    }
 
-    // Decode a completed sniffed frame (sniff_class_/sniff_id_/sniff_buf_) into the snapshots above.
-    void DebugDecodeSniffedFrame();
+    Latest<M10Diagnostics::RfStatus> rf_;
+    Latest<M10Diagnostics::SbasStatus> sbas_;
+    Latest<M10Diagnostics::CommsStatus> comms_;
+    Latest<M10Diagnostics::Hw3Status> hw3_;
+    // TEMPORARY: for DebugDumpModuleStatus (remove with the debug instrumentation).
+    Latest<M10Diagnostics::SatelliteSummary> satellites_;
+
+    // Antenna mode from settings: ANTSETTING for the jamming detector and, in the airgrep profile, the supervisor.
+    bool ConfigureAntenna(uint8_t layers);
 };

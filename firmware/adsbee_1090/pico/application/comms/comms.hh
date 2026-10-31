@@ -102,6 +102,7 @@ class CommsManager {
     CPP_AT_CALLBACK(ATRemoteIDTxCallback);
     CPP_AT_CALLBACK(ATGNSSCallback);
     CPP_AT_CALLBACK(ATGNSSFixCallback);
+    CPP_AT_CALLBACK(ATGNSSDiagCallback);
     CPP_AT_CALLBACK(ATHostnameCallback);
     CPP_AT_CALLBACK(ATIPModeCallback);
     CPP_AT_CALLBACK(ATLEDBlinkCallback);
@@ -146,6 +147,7 @@ class CommsManager {
     int32_t ATReadConsole(char* buf, uint16_t max_len, uint32_t timeout_ms, bool terminate_on_newline = false);
 
     void HandleCommsUARTIRQ();
+    void UpdateGNSSDiagnostics();
     SettingsManager::SerialInterface ATReplyInterface() const {
         return at_source_ == ATSource::kUART ? SettingsManager::kCommsUART : SettingsManager::kConsole;
     }

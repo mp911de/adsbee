@@ -8,6 +8,9 @@
 #include "pico/stdlib.h"  // For gpio_* and tight_loop_contents() used by subclasses/impl.
 #include "settings.hh"
 
+class M10Telemetry;
+class UbloxMAXM10;
+
 /**
  * Abstract base class for a GNSS receiver that emits NMEA over UART.
  *
@@ -110,6 +113,10 @@ class GNSSReceiver {
     /** @retval True while the GNSS interface is powered/enabled and should consume UART data. */
     bool IsActive() const { return active_; }
 
+    virtual M10Telemetry* Telemetry() { return nullptr; }
+    // The MAX-M10 driver when one is running, for module diagnostics. Other receivers return nullptr.
+    virtual UbloxMAXM10* M10() { return nullptr; }
+
     // Call on core 0 before core 1 starts: core 1's interrupts run the shared handler chain.
     static void InstallPPSHandler(uint pin);
 
@@ -159,11 +166,13 @@ class GNSSReceiver {
     /** Add one UART byte to the software ring, dropping it and counting an overflow if full. */
     void PushRxByte(char c);
 
-    // TEMPORARY debug hooks (remove with the rest of the GNSS debug instrumentation).
-    // DebugIngestByte: fed every received UART byte so a concrete receiver can passively sniff its
-    // binary protocol (e.g. ublox UBX) from the same stream the NMEA parser consumes.
-    // DebugDumpModuleStatus: prints the latest sniffed module diagnostics. Defaults no-op.
-    virtual void DebugIngestByte(char c) { (void)c; }
+    // Receives every UART byte so a concrete receiver can parse its binary protocol from the same
+    // stream the NMEA parser consumes.
+    virtual void IngestModuleByte(uint8_t byte, uint32_t now_ms) {}
+    // Forget partial frames and pending events when the byte stream is interrupted.
+    virtual void DiscardModuleStream() {}
+    // TEMPORARY debug hook (remove with the rest of the GNSS debug instrumentation): prints the
+    // latest module diagnostics. Defaults no-op.
     virtual void DebugDumpModuleStatus() {}
 
     GNSSReceiverConfig config_;

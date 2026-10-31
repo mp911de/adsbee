@@ -42,6 +42,7 @@ Wi-Fi GDL90. Remote feeds receive no FLARM target data. Stealth/no-track flags r
 The display must enforce privacy for identifiers and performance information.
 
 The `#F` v1 contract is in [common/flarm/README.md](../../../common/flarm/README.md).
+Select `AIRGREP` output for CSBee plus [M10 diagnostic telemetry](../../../../docs/adsbee-1090/airgrep-telemetry.md).
 The [FFPP license](../../../common/flarm/FLARM_FFPP_LICENSE.md) must accompany
 firmware distributions containing this decoder. No transmitter is implemented.
 

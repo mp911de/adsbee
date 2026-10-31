@@ -134,6 +134,9 @@ static T (&ReportScratch()) [N] {
 bool CommsManager::UpdateReporting(const ReportSink* sinks, const SettingsManager::ReportingProtocol* sink_protocols,
                                    uint16_t num_sinks, const CompositeArray::RawPackets* packets_to_report,
                                    bool report_locally_decoded) {
+#ifdef ON_PICO
+    if (at_command_active_) return true;
+#endif
     bool ret = true;
     uint32_t timestamp_ms = get_time_since_boot_ms();
 
@@ -181,6 +184,7 @@ bool CommsManager::UpdateReporting(const ReportSink* sinks, const SettingsManage
                 beast_no_uat_uplink_sinks[num_beast_no_uat_uplink_sinks++] = sinks[i];
                 break;
             case SettingsManager::kCSBee:
+            case SettingsManager::kAirgrep:
                 csbee_sinks[num_csbee_sinks++] = sinks[i];
                 break;
             case SettingsManager::kMAVLINK1:

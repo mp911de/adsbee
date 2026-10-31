@@ -6,6 +6,8 @@ All receivers currently offered in the ADSBee 1090 family are capable of dual ba
 
 To get an ADSBee 1090 up and running, see the [Quick Start](../getting-started/quick-start.md).
 
+For AIRGREP serial output, see the [telemetry protocol](airgrep-telemetry.md).
+
 ## 1090U
 
 Dual-band Mode S and UAT receiver with USB, UART, and WiFi connectivity options.

@@ -68,6 +68,12 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_mode_s_bit_error_correction.cc
         test_mode_s_single_bit_filter.cc
         test_nmea_parser.cc
+        test_ubx_parser.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ubx_parser.cc
+        test_m10_diagnostics.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/m10_diagnostics.cc
+        test_m10_telemetry.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/m10_telemetry.cc
         test_pps_clock.cc
         test_flarm.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc

@@ -18,6 +18,9 @@ else()
         # si4362/si4362.cc
         cc1312/cc1312.cc
         gnss/nmea_parser.cc
+        gnss/ubx_parser.cc
+        gnss/m10_diagnostics.cc
+        gnss/m10_telemetry.cc
         gnss/gnss_receiver.cc
         gnss/generic_gnss_receiver.cc
         gnss/ublox_max_m10.cc

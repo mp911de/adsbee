@@ -8,6 +8,7 @@
 #include "pico/stdlib.h"
 #include "hardware/irq.h"
 #include "spi_coprocessor.hh"
+#include "gnss_interface.hh"
 
 static const CommsManager::ReportSink kReportingSinks[] = {SettingsManager::SerialInterface::kConsole,
                                                            SettingsManager::SerialInterface::kCommsUART};
@@ -58,6 +59,7 @@ void CommsManager::HandleCommsUARTIRQ() {
 bool CommsManager::Update() {
     UpdateAT();
     UpdateNetworkConsole();
+    UpdateGNSSDiagnostics();
 
     uint32_t timestamp_ms = get_time_since_boot_ms();
     if (timestamp_ms - last_raw_report_check_timestamp_ms_ > kRawReportingCheckIntervalMs) {
@@ -86,6 +88,25 @@ bool CommsManager::Update() {
     }
 
     return true;
+}
+
+void CommsManager::UpdateGNSSDiagnostics() {
+    if (at_command_active_ || !gnss || !gnss->IsActive()) return;
+    auto* telemetry = gnss->Telemetry();
+    if (!telemetry) return;
+    telemetry->SetEnabled(settings_manager.settings.gnss_diagnostics);
+    ReportSink sinks[kNumReportingSinks];
+    uint16_t count = 0;
+    for (auto sink : kReportingSinks) {
+        if (settings_manager.settings.reporting_protocols[sink] == SettingsManager::kAirgrep) sinks[count++] = sink;
+    }
+    if (count == 0) return;
+    char frame[M10Telemetry::kFrameMaxLen + 1];
+    size_t length = telemetry->NextFrame(frame, sizeof(frame));
+    if (!length) return;
+    bool sent = true;
+    for (uint16_t i = 0; i < count; ++i) sent &= SendBuf(sinks[i], frame, length);
+    if (!sent) telemetry->DropActive();
 }
 
 bool CommsManager::ForceFlushRawPackets() {
@@ -197,6 +218,7 @@ int CommsManager::iface_vprintf(SettingsManager::SerialInterface iface, const ch
 bool CommsManager::iface_putc(SettingsManager::SerialInterface iface, char c) {
     switch (iface) {
         case SettingsManager::kCommsUART:
+            hard_assert(get_core_num() == 0);
             uart_putc_raw(config_.comms_uart_handle, c);
             return true;  // Function is void so we won't know if it succeeds.
             break;
@@ -276,6 +298,7 @@ bool CommsManager::iface_getc(SettingsManager::SerialInterface iface, char& c) {
 bool CommsManager::iface_puts(SettingsManager::SerialInterface iface, const char* buf) {
     switch (iface) {
         case SettingsManager::kCommsUART:
+            hard_assert(get_core_num() == 0);
             uart_puts(config_.comms_uart_handle, buf);
             return true;  // Function is void so we won't know if it succeeds.
             break;

@@ -17,7 +17,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 19;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 20;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -48,6 +48,7 @@ class SettingsManager {
         kGDL90NoUATUplink,  // Appended (not next to kGDL90): values are flash-persisted, don't renumber.
         kAircraftJSONUATUplink,  // Aircraft JSON plus one line per UAT ground uplink.
         kASTERIX,                // EUROCONTROL ASTERIX CAT021 target reports and CAT023 status.
+        kAirgrep,                // CSBee plus GNSS diagnostic telemetry.
         kNumProtocols
     };
     static constexpr uint16_t kReportingProtocolStrMaxLen = 30;
@@ -105,6 +106,15 @@ class SettingsManager {
         kGNSSReceiverNone = 0,
         kGNSSReceiverGeneric,
         kGNSSReceiverUBXMIA,
+    };
+
+    // Antenna mode: what the user declared about the GNSS antenna. Supervised adds the M10 antenna supervisor.
+    enum GNSSAntennaMode : uint8_t {
+        kGNSSAntennaUnknown = 0,
+        kGNSSAntennaPassive,
+        kGNSSAntennaActive,
+        kGNSSAntennaActiveSupervised,
+        kNumGNSSAntennaModes
     };
 
     // IP versions used on the Ethernet and WiFi station interfaces. The WiFi access point is always IPv4.
@@ -322,6 +332,8 @@ class SettingsManager {
         bool gnss_enabled = false;
         GNSSReceiverType gnss_receiver_type = kGNSSReceiverNone;
         bool gnss_notify = false;
+        bool gnss_diagnostics = false;
+        GNSSAntennaMode gnss_antenna = kGNSSAntennaUnknown;
 
         // CommunicationsManager settings
         LogLevel log_level = LogLevel::kWarnings;
@@ -768,6 +780,12 @@ class SettingsManager {
         }
     }
 
+    static constexpr const char* kGNSSAntennaModeStrs[kNumGNSSAntennaModes] = {"UNKNOWN", "PASSIVE", "ACTIVE",
+                                                                                "ACTIVE_SUPERVISED"};
+    static inline const char* GNSSAntennaModeToStr(GNSSAntennaMode mode) {
+        return mode < kNumGNSSAntennaModes ? kGNSSAntennaModeStrs[mode] : kGNSSAntennaModeStrs[kGNSSAntennaUnknown];
+    }
+
     /**
      * Used to retrieve device information, either directly from EEPROM or via interprocessor SPI bus.
      * @param[in] device_info DeviceInfo struct to set.
@@ -880,7 +898,7 @@ extern SettingsManager settings_manager;
 //      settings_migration.cpp (see the recipe at the top of settings_versions.hh).
 //   3. Update the version and the numbers below to the new layout.
 // Do not just edit the numbers. They hold on every target (host tests, RP2040, ESP32-S3, CC1312).
-static_assert(kSettingsVersion == 19,
+static_assert(kSettingsVersion == 20,
               "kSettingsVersion changed: update the Settings layout lock below to the new version's layout.");
 static_assert(sizeof(SettingsManager::Settings) == 1792,
               "Settings layout changed without a kSettingsVersion bump and a migration. See the comment above.");
@@ -892,7 +910,9 @@ static_assert(offsetof(SettingsManager::Settings, core_network_settings) == 4, "
 static_assert(offsetof(SettingsManager::Settings, led_enabled) == 260, "Settings layout changed. See above.");
 static_assert(offsetof(SettingsManager::Settings, feeds_enabled) == 261, "Settings layout changed. See above.");
 static_assert(offsetof(SettingsManager::Settings, gnss_notify) == 264, "Settings layout changed. See above.");
-static_assert(offsetof(SettingsManager::Settings, log_level) == 266, "Settings layout changed. See above.");
+static_assert(offsetof(SettingsManager::Settings, gnss_diagnostics) == 265, "Settings layout changed. See above.");
+static_assert(offsetof(SettingsManager::Settings, gnss_antenna) == 266, "Settings layout changed. See above.");
+static_assert(offsetof(SettingsManager::Settings, log_level) == 268, "Settings layout changed. See above.");
 static_assert(offsetof(SettingsManager::Settings, baud_rates) == 276, "Settings layout changed. See above.");
 static_assert(offsetof(SettingsManager::Settings, subg_mode) == 291, "Settings layout changed. See above.");
 static_assert(offsetof(SettingsManager::Settings, remote_id_tx_enabled) == 294, "Settings layout changed. See above.");
