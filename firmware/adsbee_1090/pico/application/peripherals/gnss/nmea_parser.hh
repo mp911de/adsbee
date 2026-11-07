@@ -47,6 +47,7 @@ class NMEAParser {
         int32_t speed_kts = 0;          // Speed over ground, knots.
         uint8_t num_satellites = 0;     // Satellites used in the GGA fix.
         uint8_t fix_quality = 0;        // GGA fix quality (0 = no fix, 1 = GPS, 2 = DGPS, ...).
+        float hdop = -1.0f;             // GGA horizontal dilution of precision, -1 when not reported.
         bool utc_time_valid = false;    // True when a valid NMEA UTC time has been parsed.
         uint8_t utc_hour = 0;
         uint8_t utc_minute = 0;

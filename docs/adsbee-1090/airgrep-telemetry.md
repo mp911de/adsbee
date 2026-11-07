@@ -25,9 +25,20 @@ CSBee output. Network feeds do not support AIRGREP.
 runs with antenna mode `ACTIVE_SUPERVISED` on a carrier wired for it. Other modes
 report `DONTKNOW`.
 
-`AT+GNSS_FIX?` appends antenna status, SBAS system, the number of satellites with
-SBAS corrections, and the first satellite's pseudorange and ionosphere corrections
-in cm (-1 each when none). `AT+GNSS_DIAG?` prints the latest RF and SBAS records
+`AT+GNSS_STATUS?` returns one line for parsers, from stored records only:
+
+```text
+GNSS_STATUS=<module>,<software>,<hardware>,<hdop>,<antenna>,<antenna_power>,<max_cno>,<seen>,<no_signal>,<searching>,<acquired>,<unusable>,<locked>,<ephemeris>,<used>,<healthy>,<unhealthy>,<sbas_mode>,<sbas_system>,<sbas_sats>,<prc_cm>,<ic_cm>
+```
+
+- `antenna` is `INIT`, `DONTKNOW`, `OK`, `SHORT` or `OPEN`. `antenna_power` is `OFF`, `ON` or `DONTKNOW`.
+- `max_cno` is the best C/N0 in dBHz. `seen` to `unhealthy` count satellites.
+- `no_signal`, `searching`, `acquired`, `unusable` and `locked` are the signal quality states; each
+  satellite is in one.
+- `prc_cm` and `ic_cm` are the first corrected satellite's pseudorange and ionosphere corrections.
+- A value that is missing or older than 15 s reads `-1` or `UNKNOWN`.
+
+`AT+GNSS_DIAG?` prints the latest RF and SBAS records
 with their age and polls MON-COMMS and MON-HW3 from the module, one labeled line
 each, for people rather than parsers.
 

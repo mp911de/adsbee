@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "m10_diagnostics.hh"
+#include "ublox_max_m10_diagnostics.hh"
 
 // Turns MAX-M10 error, warning and RF status events into airgrep #M10 frames.
 // Each event kind keeps only its latest occurrence until a frame sequence picks it up.

@@ -1,4 +1,4 @@
-#include "m10_diagnostics.hh"
+#include "ublox_max_m10_diagnostics.hh"
 
 #include <string>
 #include <vector>
@@ -188,6 +188,21 @@ TEST(M10Diagnostics, ParsesFirstRfBlockWithSignedOffsets) {
     EXPECT_EQ(c.rf.size(), 1u);
 }
 
+TEST(M10Diagnostics, FirstCorrectedSbasSatelliteHasTheCorrectionsServiceBit) {
+    M10Diagnostics::SbasStatus sbas;
+    EXPECT_EQ(sbas.FirstCorrected(), nullptr);
+    sbas.count = 3;
+    sbas.satellites[0].service = 0x05;  // Ranging and integrity only.
+    sbas.satellites[2].service = M10Diagnostics::kSbasServiceCorrections;
+    EXPECT_EQ(sbas.FirstCorrected(), &sbas.satellites[2]);
+    sbas.count = 2;
+    EXPECT_EQ(sbas.FirstCorrected(), nullptr);
+    // The wire count can exceed the stored satellites.
+    sbas.count = 200;
+    sbas.satellites[2].service = 0;
+    EXPECT_EQ(sbas.FirstCorrected(), nullptr);
+}
+
 TEST(M10Diagnostics, SatelliteSummaryCoversStoredRecordsOnly) {
     Capture c;
     std::string payload(8 + 3 * 12, '\0');
@@ -205,6 +220,34 @@ TEST(M10Diagnostics, SatelliteSummaryCoversStoredRecordsOnly) {
     EXPECT_EQ(c.satellites[1].max_cno_dbhz, 45);
     payload[4] = 0;
     EXPECT_FALSE(Decode(c, 0x01, 0x35, payload));
+}
+
+TEST(M10Diagnostics, SatelliteSummaryCountsAcquisitionStages) {
+    Capture c;
+    // Flags byte 0 holds qualityInd (bits 2..0), svUsed (bit 3) and health (bits 5..4). Byte 1 bit 3 is ephAvail
+    // (flags bit 11).
+    const uint8_t flags[][2] = {{0, 0},        {1, 0},           {2 | 0x20, 0},           {3 | 0x20, 0},
+                                {4 | 0x10, 0}, {5 | 0x10, 0x08}, {7 | 0x08 | 0x10, 0x08}};
+    const size_t count = sizeof(flags) / sizeof(flags[0]);
+    std::string payload(8 + count * 12, '\0');
+    payload[4] = 1;
+    payload[5] = count;
+    for (size_t i = 0; i < count; i++) {
+        payload[8 + i * 12 + 8] = flags[i][0];
+        payload[8 + i * 12 + 9] = flags[i][1];
+    }
+    ASSERT_TRUE(Decode(c, 0x01, 0x35, payload));
+    ASSERT_EQ(c.satellites.size(), 1u);
+    EXPECT_EQ(c.satellites[0].count, 7);
+    EXPECT_EQ(c.satellites[0].no_signal, 1);
+    EXPECT_EQ(c.satellites[0].searching, 1);
+    EXPECT_EQ(c.satellites[0].acquired, 1);
+    EXPECT_EQ(c.satellites[0].unusable, 1);
+    EXPECT_EQ(c.satellites[0].locked, 3);
+    EXPECT_EQ(c.satellites[0].ephemeris, 2);
+    EXPECT_EQ(c.satellites[0].used, 1);
+    EXPECT_EQ(c.satellites[0].healthy, 3);
+    EXPECT_EQ(c.satellites[0].unhealthy, 2);
 }
 
 TEST(M10Diagnostics, UnknownMessageIsIgnored) {

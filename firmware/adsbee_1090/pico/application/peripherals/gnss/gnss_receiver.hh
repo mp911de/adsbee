@@ -116,6 +116,9 @@ class GNSSReceiver {
     virtual M10Telemetry* Telemetry() { return nullptr; }
     // The MAX-M10 driver when one is running, for module diagnostics. Other receivers return nullptr.
     virtual UbloxMAXM10* M10() { return nullptr; }
+    // Move the module to a new UART rate. The caller then switches the host UART. Receivers without a rate
+    // command keep their rate.
+    virtual void SetModuleBaudrate(uint32_t baudrate) {}
 
     // Call on core 0 before core 1 starts: core 1's interrupts run the shared handler chain.
     static void InstallPPSHandler(uint pin);

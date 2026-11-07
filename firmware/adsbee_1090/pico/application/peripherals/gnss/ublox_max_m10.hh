@@ -2,7 +2,7 @@
 
 #include "gnss_receiver.hh"
 #include "hal.hh"  // For get_time_since_boot_ms().
-#include "m10_telemetry.hh"
+#include "ublox_max_m10_telemetry.hh"
 #include "ubx_parser.hh"
 #ifdef AIRGREP
 #include "../../../profiles/airgrep_gnss.hh"
@@ -23,17 +23,20 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
    public:
     // Settle floor after power-on before we start probing. u-blox does not publish a fixed
     // Vcc-to-UART-ready time for the M10 (only TTFF, which is fix time, not UART readiness)
-    static constexpr uint32_t kAckTimeoutMs = 150;
+    static constexpr uint32_t kAckTimeoutMs = 250;
 
     // Liveness probe (UBX-MON-VER poll) timeout, per attempt. A u-blox-reported data point shows some
     // modules are still not ready to answer at 300 ms after startup, so allow a bit more headroom.
     static constexpr uint32_t kProbeTimeoutMs = 500;
 
+    // diagnosstics timeout
+    static constexpr uint32_t kDiagnosticsTimeoutMs = 1500;
+
     // M10 factory default, used to recover a module that does not answer at the configured rate.
     static constexpr uint32_t kSafeBaudrate = 9600;
     static constexpr uint32_t kBaudrateSwitchSettleMs = 100;  // Integration manual: about 100 ms before input at the new rate.
 
-    // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults). 
+    // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults).
     static constexpr uint32_t kInitConfigBudgetMs = 10000;
 
     // UBX protocol constants.
@@ -58,7 +61,12 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     enum CfgLayer : uint8_t {
         kCfgLayerRam = 0x01,    // Effective immediately.
         kCfgLayerBbr = 0x02,    // Battery-backed RAM; effective on restart, persists with V_BCKP.
-        kCfgLayerFlash = 0x04,  // External flash (if present); effective on restart.
+        kCfgLayerFlash = 0x04,  // External flash (if present)
+
+        kCfgGetLayerRam = 0x0,       // RAM layer
+        kCfgGetLayerBbr = 0x01,      // Battery-backed RAM
+        kCfgGetLayerFlash = 0x02,    // External flash.
+        kCfgGetLayerDefault = 0x07,  // default layer
     };
 
     // Selected commonly-used configuration key IDs. The full default catalog lives in
@@ -98,14 +106,26 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
         bool valid = false;
         uint32_t received_ms = 0;
         T value;
+        // A record this old no longer describes the module, e.g. after it stopped sending.
+        bool IsFresh(uint32_t now_ms) const { return valid && now_ms - received_ms <= kStatusMaxAgeMs; }
     };
+    static constexpr uint32_t kStatusMaxAgeMs = 15000;
 
+    // Text from UBX-MON-VER. Empty until the module answers a probe.
+    struct Version {
+        char module[27] = "", software[31] = "", hardware[11] = "";
+    };
     UbloxMAXM10(GNSSReceiverConfig config_in) : GNSSReceiver(config_in, BSP::kGNSSModuleUbloxMAXM10) {}
 
     M10Telemetry* Telemetry() override { return &telemetry_; }
     UbloxMAXM10* M10() override { return this; }
+    void SetModuleBaudrate(uint32_t baudrate) override { SendBaudrate(baudrate, kCfgLayerRam | kCfgLayerBbr); }
     const Latest<M10Diagnostics::RfStatus>& rf() const { return rf_; }
     const Latest<M10Diagnostics::SbasStatus>& sbas() const { return sbas_; }
+    const Latest<M10Diagnostics::SatelliteSummary>& satellites() const { return satellites_; }
+    const Version& version() const { return version_; }
+    // True if BBR held CFG-SIGNAL-SBAS_ENA at init, so the module kept its configuration across power-off.
+    bool sbas_known_configured() const { return sbas_known_configured_; }
     // Request one MON-COMMS or MON-HW3 record and wait up to kProbeTimeoutMs for it.
     bool PollComms(M10Diagnostics::CommsStatus& comms);
     bool PollHw3(M10Diagnostics::Hw3Status& hw3);
@@ -125,9 +145,10 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
      * @param[in] key_id 32-bit configuration key ID (size encoded in bits 30..28).
      * @param[in] value_size_bytes Number of value bytes expected (1, 2, 4, or 8).
      * @param[out] value_out Receives the little-endian value the module reported.
+    * @param[in] layer layer from which the configuration items should be retrieved.
      * @retval True if the module returned this key's value, false on timeout / not present.
      */
-    bool CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out);
+    bool CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out, uint8_t layer);
 
     // Typed convenience wrappers around CfgValSet.
     bool CfgValSetU1(uint32_t key, uint8_t v, uint8_t layers) { return CfgValSet(key, v, 1, layers); }
@@ -190,6 +211,9 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     // Poll UBX-MON-VER once at the current host rate.
     bool Probe();
     void SetHostBaudrate(uint32_t baudrate);
+    // Tell the module its new UART1 rate at the current host rate. The acknowledgment is not awaited: it may
+    // arrive at either rate.
+    void SendBaudrate(uint32_t baudrate, uint8_t layers);
 
     // Find the module at the configured rate, else at kSafeBaudrate and move it to the configured rate.
     // @retval True if the module answers, at the configured rate or at kSafeBaudrate.
@@ -232,10 +256,10 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
         telemetry_.OnInfo(error, text, length, truncated);
     }
     void OnRf(const M10Diagnostics::RfStatus& rf) override;
-    void OnSbas(const M10Diagnostics::SbasStatus& sbas) override { Store(sbas_, sbas); }
-    void OnComms(const M10Diagnostics::CommsStatus& comms) override { Store(comms_, comms); }
-    void OnHw3(const M10Diagnostics::Hw3Status& hw3) override { Store(hw3_, hw3); }
-    void OnSatellites(const M10Diagnostics::SatelliteSummary& satellites) override { Store(satellites_, satellites); }
+    void OnSbas(const M10Diagnostics::SbasStatus& sbas) override;
+    void OnComms(const M10Diagnostics::CommsStatus& comms) override;
+    void OnHw3(const M10Diagnostics::Hw3Status& hw3) override;
+    void OnSatellites(const M10Diagnostics::SatelliteSummary& satellites) override;
     template <typename T>
     static void Store(Latest<T>& latest, const T& value) {
         latest.value = value;
@@ -247,8 +271,9 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     Latest<M10Diagnostics::SbasStatus> sbas_;
     Latest<M10Diagnostics::CommsStatus> comms_;
     Latest<M10Diagnostics::Hw3Status> hw3_;
-    // TEMPORARY: for DebugDumpModuleStatus (remove with the debug instrumentation).
     Latest<M10Diagnostics::SatelliteSummary> satellites_;
+    Version version_;
+    bool sbas_known_configured_ = false;
 
     // Antenna mode from settings: ANTSETTING for the jamming detector and, in the airgrep profile, the supervisor.
     bool ConfigureAntenna(uint8_t layers);

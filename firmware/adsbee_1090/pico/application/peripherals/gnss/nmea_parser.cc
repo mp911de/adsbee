@@ -197,6 +197,7 @@ NMEAParser::SentenceType NMEAParser::ParseGGA(const char* const* fields, uint8_t
     uint8_t fix_quality = static_cast<uint8_t>(atoi(fields[6]));
     fix_.fix_quality = fix_quality;
     fix_.num_satellites = static_cast<uint8_t>(atoi(fields[7]));
+    fix_.hdop = fields[8][0] != '\0' ? strtof(fields[8], nullptr) : -1.0f;
     ParseUTCTime(fields[1], fix_);
 
     if (fields[9][0] != '\0') {

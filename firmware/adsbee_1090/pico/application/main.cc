@@ -67,7 +67,11 @@ ModeSPacketDecoder decoder = ModeSPacketDecoder({.enable_1090_error_correction =
 
 int main() {
     RAMMonitor::PaintCore0Stack();
+    #ifdef AIRGREP
+    bi_decl(bi_program_description("ADSBee 1090 ADSB Receiver with airgrep"));
+    #else
     bi_decl(bi_program_description("ADSBee 1090 ADSB Receiver"));
+    #endif
     adsbee.aircraft_dictionary.SetAddressParityCorrection(kEnable1090ErrorCorrection);
     decoder.backlog_callback = [] { return adsbee.CaptureQueueLength(); };
 

@@ -11,7 +11,7 @@ ADSBEE_PROFILE=airgrep bash firmware/build.sh adsbee_1090 flash
 | Profile | COMMS_UART | UART AT console | GNSS UBX diagnostics | RP2040 release output |
 |---|---|---|---|---|
 | `default` (unset) | 115200 8N1 | disabled | NAV-SAT, MON-RF at 1 Hz | `pico/build/Release/` |
-| `airgrep` | 115200 8E1 | enabled | off, GGA/RMC only | `pico/build/Release-airgrep/` |
+| `airgrep` | 115200 8E1 | enabled | NAV-SAT, NAV-SBAS, MON-RF every 5 s | `pico/build/Release-airgrep/` |
 
 Both use 3.3 V and no flow control. USB is unchanged. At 9600 baud the UBX diagnostics saturate
 the GNSS link and delay RMC time by seconds, which FLARM decryption cannot tolerate.

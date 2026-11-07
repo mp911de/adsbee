@@ -5,7 +5,7 @@
 #include "comms.hh"             // For comms_manager (UART I/O + baud) and CONSOLE_* logging.
 #include "cpu_utils.hh"
 #include "hal.hh"               // For get_time_since_boot_ms().
-#include "m10_telemetry.hh"
+#include "ublox_max_m10_telemetry.hh"
 
 void GNSSReceiver::ParkTx() {
     gpio_set_dir(config_.uart_tx_pin, GPIO_IN);

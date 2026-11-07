@@ -71,9 +71,9 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_ubx_parser.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ubx_parser.cc
         test_m10_diagnostics.cc
-        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/m10_diagnostics.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_diagnostics.cc
         test_m10_telemetry.cc
-        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/m10_telemetry.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_telemetry.cc
         test_pps_clock.cc
         test_flarm.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc
@@ -99,6 +99,7 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_swarm.cc
         test_feed_send_buffer.cc
         test_feed_receiver_id.cc
+        test_log_category_filter.cc
         test_log_message.cc
         test_squitter_packets.cc
         test_transponder_packet.cc

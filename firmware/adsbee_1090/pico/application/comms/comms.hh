@@ -7,6 +7,7 @@
 #include "cpp_at.hh"
 #include "data_structures.hh"  // For PFBQueue.
 #include "hardware/uart.h"
+#include "log_category_filter.hh"
 #include "mode_s_packet.hh"
 #include "settings.hh"
 #include "uat_packet.hh"
@@ -102,6 +103,7 @@ class CommsManager {
     CPP_AT_CALLBACK(ATRemoteIDTxCallback);
     CPP_AT_CALLBACK(ATGNSSCallback);
     CPP_AT_CALLBACK(ATGNSSFixCallback);
+    CPP_AT_CALLBACK(ATGNSSStatusCallback);
     CPP_AT_CALLBACK(ATGNSSDiagCallback);
     CPP_AT_CALLBACK(ATHostnameCallback);
     CPP_AT_CALLBACK(ATIPModeCallback);
@@ -109,6 +111,7 @@ class CommsManager {
     CPP_AT_CALLBACK(ATLEDEnableCallback);
     CPP_AT_CALLBACK(ATOTACallback);
     CPP_AT_HELP_CALLBACK(ATOTAHelpCallback);
+    CPP_AT_CALLBACK(ATLogCategoryCallback);
     CPP_AT_CALLBACK(ATLogLevelCallback);
     CPP_AT_CALLBACK(ATASTERIXSACSICCallback);
     CPP_AT_CALLBACK(ATMAVLINKIDCallback);
@@ -289,6 +292,7 @@ class CommsManager {
     bool ReadATByte(char& c, bool& error);
     ATSource at_source_ = ATSource::kUSB;
     bool at_command_active_ = false;
+    LogCategoryFilter log_categories_;
     uint32_t pending_comms_baud_ = 0;
     queue_t comms_uart_rx_queue_;
     bool comms_uart_rx_overflow_ = false;

@@ -1,5 +1,6 @@
 .cmake/
 build/*
+generated/*
 _deps/
 pico-sdk/
 application/peripherals/esp32/bin/

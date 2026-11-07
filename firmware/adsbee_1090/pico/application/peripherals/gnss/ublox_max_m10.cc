@@ -10,6 +10,14 @@
 
 namespace {
 
+// Copies a NUL padded text field of length bytes into a NUL terminated buffer.
+template <size_t N>
+void CopyField(char (&out)[N], const uint8_t* field, size_t length) {
+    size_t copied = strnlen(reinterpret_cast<const char*>(field), length < N - 1 ? length : N - 1);
+    memcpy(out, field, copied);
+    out[copied] = '\0';
+}
+
 // Append a UBX-CFG-VALSET cfgData entry (4-byte key, little-endian, followed by value_size value
 // bytes, little-endian) to buf at offset. Returns the new offset.
 uint16_t AppendCfgKeyValue(uint8_t* buf, uint16_t offset, uint32_t key_id, uint64_t value, uint8_t value_size_bytes) {
@@ -116,9 +124,12 @@ bool UbloxMAXM10::Probe() {
     if (length >= 40 && length <= sizeof(payload) && (length - 40) % 30 == 0) {
         CONSOLE_INFO("UbloxMAXM10::Probe", "GNSS version: software=%.*s hardware=%.*s", 30,
                      reinterpret_cast<const char*>(payload), 10, reinterpret_cast<const char*>(payload + 30));
+        CopyField(version_.software, payload, 30);
+        CopyField(version_.hardware, payload + 30, 10);
         for (uint16_t offset = 40; offset < length; offset += 30) {
             CONSOLE_INFO("UbloxMAXM10::Probe", "GNSS version extension: %.*s", 30,
                          reinterpret_cast<const char*>(payload + offset));
+            if (memcmp(payload + offset, "MOD=", 4) == 0) CopyField(version_.module, payload + offset + 4, 26);
         }
     }
     return true;
@@ -130,6 +141,12 @@ void UbloxMAXM10::SetHostBaudrate(uint32_t baudrate) {
     char c;
     while (ReadBufferedByte(c)) {
     }
+}
+
+void UbloxMAXM10::SendBaudrate(uint32_t baudrate, uint8_t layers) {
+    uint8_t payload[4 + 4 + 4] = {0, layers, 0, 0};
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, AppendCfgKeyValue(payload, 4, kCfgUart1Baudrate, baudrate, 4));
+    uart_tx_wait_blocking(config_.uart_handle);
 }
 
 bool UbloxMAXM10::ConnectAtConfiguredBaudrate() {
@@ -145,10 +162,7 @@ bool UbloxMAXM10::ConnectAtConfiguredBaudrate() {
 
     // Switch RAM only and skip the acknowledgment, which may arrive at either rate. BBR is written
     // only once the module answers at the new rate, so a failed switch is undone by a power cycle.
-    uint8_t payload[4 + 4 + 4] = {0, kCfgLayerRam, 0, 0};
-    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload,
-                 AppendCfgKeyValue(payload, 4, kCfgUart1Baudrate, configured, 4));
-    uart_tx_wait_blocking(config_.uart_handle);
+    SendBaudrate(configured, kCfgLayerRam);
     sleep_ms(kBaudrateSwitchSettleMs);
     SetHostBaudrate(configured);
     if (Probe() && CfgValSetU4(kCfgUart1Baudrate, configured, kCfgLayerBbr)) {
@@ -163,12 +177,12 @@ bool UbloxMAXM10::ConnectAtConfiguredBaudrate() {
     return Probe();
 }
 
-bool UbloxMAXM10::CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out) {
+bool UbloxMAXM10::CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out, uint8_t layer) {
     // Poll one key from the RAM layer. Request payload: version(0) + layer(0=RAM) + position(u2=0)
     // + key(u4). (See interface description S3.10.4.)
     uint8_t req[4 + 4];
     req[0] = 0x00;                            // version 0 (poll request)
-    req[1] = 0x00;                            // layer 0 = RAM (the effective, running config)
+    req[1] = layer;                           // layer
     req[2] = 0x00;                            // position lo
     req[3] = 0x00;                            // position hi
     AppendCfgKeyValue(req, 4, key_id, 0, 0);  // key only, no value bytes for a poll request.
@@ -226,7 +240,7 @@ int32_t UbloxMAXM10::SyncConfigDefaults(uint32_t deadline_ms) {
         }
         const UbloxCfgDefault& d = kUbloxConfigDefaults[i];
         uint64_t current = 0;
-        if (!CfgValGet(d.key_id, d.size_bytes, current)) {
+        if (!CfgValGet(d.key_id, d.size_bytes, current, kCfgGetLayerRam)) {
             // Couldn't read this key back; write it to be safe (fresh module / unknown state).
             num_read_fail++;
             if (CfgValSet(d.key_id, d.value, d.size_bytes, layers)) num_written++;
@@ -257,6 +271,11 @@ bool UbloxMAXM10::ConfigureAirgrep(uint8_t layers) {
     bool msgs = ConfigureAirgrepMessages(layers);
     bool meas = CfgValSetU2(kCfgRateMeas, 1000, layers);
     bool navrate = CfgValSetU2(kCfgRateNav, 1, layers);
+
+    uint64_t sbas_configured = 0;
+    CfgValGet(kCfgSignalSbas, 1, sbas_configured, kCfgGetLayerBbr);
+
+    sbas_known_configured_ = sbas_configured != 0;
     bool sbas = CfgValSetL(kCfgSignalSbas, true, layers);
     bool i2c = CfgValSetL(kCfgI2cEnabled, false, layers);  // SDA/SCL carry the antenna supervisor signals.
     bool antenna = ConfigureAntenna(layers);
@@ -287,7 +306,9 @@ bool UbloxMAXM10::ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, ui
     watchdog_update();
     uint8_t payload[4 + kMessageBatchSize * 5] = {0, layers, 0, 0};
     uint16_t len = 4;
-    for (uint8_t i = 0; i < count; i++) len = AppendCfgKeyValue(payload, len, messages[i].key, messages[i].rate, 1);
+    for (uint8_t i = 0; i < count; i++) {
+        len = AppendCfgKeyValue(payload, len, messages[i].key, messages[i].rate, 1);
+    }
     SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, len);
     bool nak = false;
     if (!ScanForUbxMessage(kUbxClassCfg, kUbxIdCfgValset, timeout_ms, nullptr, 0, nullptr, nullptr, &nak)) return false;
@@ -397,7 +418,7 @@ void UbloxMAXM10::ApplyDiagnosticStreams(uint8_t layers) {
 
 bool UbloxMAXM10::ConfigureAntenna(uint8_t layers) {
     SettingsManager::GNSSAntennaMode mode = settings_manager.settings.gnss_antenna;
-    uint8_t setting = mode == SettingsManager::kGNSSAntennaPassive ? 1
+    uint8_t setting = mode == SettingsManager::kGNSSAntennaPassive   ? 1
                       : mode == SettingsManager::kGNSSAntennaUnknown ? 0
                                                                      : 2;
     bool ok = CfgValSetE1(kCfgItfmAntSetting, setting, layers);
@@ -436,12 +457,56 @@ void UbloxMAXM10::DiscardModuleStream() {
 void UbloxMAXM10::OnRf(const M10Diagnostics::RfStatus& rf) {
     Store(rf_, rf);
     telemetry_.OnRf(rf);
+    CONSOLE_INFO("UbloxMAXM10::OnRf", "jamming=%s antenna=%s power=%s post=0x%08lX noise=%u agc=%u cw=%u I=%d/%u Q=%d/%u",
+                 M10Strings::Jamming(rf.jamming), M10Strings::AntennaStatus(rf.antenna_status),
+                 M10Strings::AntennaPower(rf.antenna_power), static_cast<unsigned long>(rf.post_status), rf.noise,
+                 rf.agc, rf.cw_suppression, rf.offset_i, rf.magnitude_i, rf.offset_q, rf.magnitude_q);
+}
+
+void UbloxMAXM10::OnSbas(const M10Diagnostics::SbasStatus& sbas) {
+    Store(sbas_, sbas);
+    CONSOLE_INFO("UbloxMAXM10::OnSbas", "mode=%s system=%s geo=%u service=0x%02X satellites=%u flags=0x%02X",
+                 M10Strings::SbasMode(sbas.mode), M10Strings::SbasSystem(sbas.system), sbas.geo, sbas.service,
+                 sbas.count, sbas.flags);
+    if (const M10Diagnostics::SbasSatellite* sv = sbas.FirstCorrected()) {
+        CONSOLE_INFO("UbloxMAXM10::OnSbas", "sv=%u prc=%dcm ic=%dcm", sv->id, sv->range_correction_cm,
+                     sv->ionosphere_correction_cm);
+    }
+}
+
+void UbloxMAXM10::OnComms(const M10Diagnostics::CommsStatus& comms) {
+    Store(comms_, comms);
+    for (uint8_t i = 0; i < comms.count && i < M10Diagnostics::kStoredCommsPorts; i++) {
+        const M10Diagnostics::CommsPort& port = comms.ports[i];
+        CONSOLE_INFO("UbloxMAXM10::OnComms",
+                     "txErrors=0x%02X port=%s tx=%luB/%u%%/peak %u%% pending=%u rx=%luB/%u%%/peak %u%% pending=%u "
+                     "overrun=%u skipped=%lu",
+                     comms.tx_errors, M10Strings::Port(port.id), static_cast<unsigned long>(port.tx_bytes),
+                     port.tx_usage, port.tx_peak_usage, port.tx_pending, static_cast<unsigned long>(port.rx_bytes),
+                     port.rx_usage, port.rx_peak_usage, port.rx_pending, port.overrun_errors,
+                     static_cast<unsigned long>(port.skipped_bytes));
+    }
+}
+
+void UbloxMAXM10::OnHw3(const M10Diagnostics::Hw3Status& hw3) {
+    Store(hw3_, hw3);
+    CONSOLE_INFO("UbloxMAXM10::OnHw3", "flags=0x%02X hw=%s pins=%u", hw3.flags, hw3.hardware_version, hw3.count);
+}
+
+void UbloxMAXM10::OnSatellites(const M10Diagnostics::SatelliteSummary& satellites) {
+    Store(satellites_, satellites);
+    CONSOLE_INFO("UbloxMAXM10::OnSatellites",
+                 "count=%u noSignal=%u searching=%u acquired=%u unusable=%u locked=%u ephemeris=%u used=%u healthy=%u "
+                 "unhealthy=%u maxCno=%udBHz",
+                 satellites.count, satellites.no_signal, satellites.searching, satellites.acquired,
+                 satellites.unusable, satellites.locked, satellites.ephemeris, satellites.used, satellites.healthy,
+                 satellites.unhealthy, satellites.max_cno_dbhz);
 }
 
 bool UbloxMAXM10::PollComms(M10Diagnostics::CommsStatus& comms) {
     comms_.valid = false;
     SendUbxFrame(kUbxClassMon, kUbxIdMonComms, nullptr, 0);
-    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonComms, kProbeTimeoutMs) || !comms_.valid) return false;
+    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonComms, kDiagnosticsTimeoutMs) || !comms_.valid) return false;
     comms = comms_.value;
     return true;
 }
@@ -449,7 +514,7 @@ bool UbloxMAXM10::PollComms(M10Diagnostics::CommsStatus& comms) {
 bool UbloxMAXM10::PollHw3(M10Diagnostics::Hw3Status& hw3) {
     hw3_.valid = false;
     SendUbxFrame(kUbxClassMon, kUbxIdMonHw3, nullptr, 0);
-    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonHw3, kProbeTimeoutMs) || !hw3_.valid) return false;
+    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonHw3, kDiagnosticsTimeoutMs) || !hw3_.valid) return false;
     hw3 = hw3_.value;
     return true;
 }

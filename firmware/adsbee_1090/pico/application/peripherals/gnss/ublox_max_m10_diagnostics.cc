@@ -1,4 +1,4 @@
-#include "m10_diagnostics.hh"
+#include "ublox_max_m10_diagnostics.hh"
 
 #include <cstring>
 
@@ -120,6 +120,18 @@ bool M10Diagnostics::DecodeSatellites(const UbxMessage& message, Listener& liste
     for (size_t offset = 8; offset + 12 <= message.stored; offset += 12) {
         uint8_t cno = p[offset + 2];
         if (cno > satellites.max_cno_dbhz) satellites.max_cno_dbhz = cno;
+        uint32_t flags = ReadU4(p + offset + 8);
+        uint8_t quality = flags & 7;
+        if (quality == 0) satellites.no_signal++;
+        if (quality == 1) satellites.searching++;
+        if (quality == 2) satellites.acquired++;
+        if (quality == 3) satellites.unusable++;
+        if (quality >= 4) satellites.locked++;
+        if (flags & (1u << 11)) satellites.ephemeris++;
+        if (flags & (1u << 3)) satellites.used++;
+        uint8_t health = (flags >> 4) & 3;  // 0 unknown, 1 healthy, 2 unhealthy.
+        if (health == 1) satellites.healthy++;
+        if (health == 2) satellites.unhealthy++;
     }
     listener.OnSatellites(satellites);
     return true;

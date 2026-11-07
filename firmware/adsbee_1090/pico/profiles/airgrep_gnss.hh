@@ -25,7 +25,7 @@ inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x209100ca, 0},  // NMEA_ID_GLL
     {0x209100b1, 0},  // NMEA_ID_VTG
     {0x2091035a, 5},  // UBX_MON_RF
-    {0x20910016, 0},  // UBX_NAV_SAT
+    {0x20910016, 5},  // UBX_NAV_SAT
     {0x209100a7, 0},  // NMEA_ID_DTM
     {0x209100de, 0},  // NMEA_ID_GBS
     {0x209100b6, 0},  // NMEA_ID_GNS

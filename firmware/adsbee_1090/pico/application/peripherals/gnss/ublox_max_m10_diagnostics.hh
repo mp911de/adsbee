@@ -13,6 +13,7 @@ class M10Diagnostics {
     static constexpr uint8_t kIdNavSbas = 0x32, kIdNavSat = 0x35;
     static constexpr uint8_t kIdMonComms = 0x36, kIdMonHw3 = 0x37, kIdMonRf = 0x38;
     static constexpr uint8_t kStoredSbasSatellites = 8;
+    static constexpr uint8_t kSbasServiceCorrections = 0x02;  // Service bit: correction data is provided.
     static constexpr uint8_t kStoredCommsPorts = 4;
     static constexpr uint8_t kStoredHw3Pins = 16;
     // Count is the wire count. Arrays retain the first entries up to their stored limit.
@@ -26,6 +27,14 @@ class M10Diagnostics {
         uint8_t geo = 0, mode = 0, service = 0, count = 0, flags = 0;
         int8_t system = 0;
         SbasSatellite satellites[kStoredSbasSatellites] = {};
+
+        // @retval The first stored satellite that receives correction data, or nullptr.
+        const SbasSatellite* FirstCorrected() const {
+            for (uint8_t i = 0; i < count && i < kStoredSbasSatellites; i++) {
+                if (satellites[i].service & kSbasServiceCorrections) return &satellites[i];
+            }
+            return nullptr;
+        }
     };
     struct CommsPort {
         uint16_t id = 0, tx_pending = 0, rx_pending = 0, overrun_errors = 0;
@@ -53,8 +62,13 @@ class M10Diagnostics {
         uint16_t noise = 0, agc = 0;
         uint32_t post_status = 0;
     };
+    // Satellites per signal quality: no_signal, searching, acquired, unusable (detected but unusable), locked (code
+    // locked and time synchronized). Independent of that: ephemeris (downloaded), used (in the navigation
+    // solution), healthy and unhealthy (neither while health is unknown).
     struct SatelliteSummary {
         uint8_t count = 0, max_cno_dbhz = 0;
+        uint8_t no_signal = 0, searching = 0, acquired = 0, unusable = 0, locked = 0;
+        uint8_t ephemeris = 0, used = 0, healthy = 0, unhealthy = 0;
     };
 
     class Listener {

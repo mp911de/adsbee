@@ -152,6 +152,7 @@ CPP_AT_CALLBACK(CommsManager::ATBaudRateCallback) {
             uint32_t baud_rate;
             CPP_AT_TRY_ARG2NUM(1, baud_rate);
             if (baud_rate == 0) CPP_AT_ERROR("Baud rate must be nonzero.");
+            if (iface == SettingsManager::kGNSSUART) gnss->SetModuleBaudrate(baud_rate);
             if (!SetBaudRate(iface, baud_rate)) {
                 CPP_AT_ERROR("Unable to set baud rate %d on interface %d.", baud_rate, iface);
             }
@@ -457,25 +458,54 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
     if (gnss->GetUTCUnixMs(utc_unix_ms)) {
         snprintf(utc_epoch, sizeof(utc_epoch), "%llu", static_cast<unsigned long long>(utc_unix_ms));
     }
-    const char* antenna = "UNKNOWN";
-    const char* sbas = "UNKNOWN";
-    int corrected = 0, prc_cm = -1, ic_cm = -1;
-    if (UbloxMAXM10* m10 = gnss->M10()) {
-        if (m10->rf().valid) antenna = M10Strings::AntennaStatus(m10->rf().value.antenna_status);
-        if (m10->sbas().valid) {
-            const M10Diagnostics::SbasStatus& status = m10->sbas().value;
-            sbas = status.mode == 0 ? "OFF" : M10Strings::SbasSystem(status.system);
-            corrected = status.count;
-            if (status.count > 0) {
-                prc_cm = status.satellites[0].range_correction_cm;
-                ic_cm = status.satellites[0].ionosphere_correction_cm;
-            }
-        }
-    }
-    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s,%s,%s,%d,%d,%d", gnss->HasValidFix(), fix.latitude_deg,
+    CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s", gnss->HasValidFix(), fix.latitude_deg,
                       fix.longitude_deg, static_cast<long>(fix.altitude_ft), fix.heading_deg,
                       static_cast<long>(fix.speed_kts), static_cast<unsigned int>(fix.num_satellites), utc_time,
-                      static_cast<unsigned long>(gnss->pps_count()), utc_epoch, antenna, sbas, corrected, prc_cm, ic_cm);
+                      static_cast<unsigned long>(gnss->pps_count()), utc_epoch);
+    CPP_AT_SILENT_SUCCESS();
+}
+
+CPP_AT_CALLBACK(CommsManager::ATGNSSStatusCallback) {
+    if (op != '?') CPP_AT_ERROR("Only AT+GNSS_STATUS? is supported.");
+
+    constexpr char kUnknown[] = "UNKNOWN";
+    const char *module = kUnknown, *software = kUnknown, *hardware = kUnknown, *antenna = kUnknown, *bbr = kUnknown;;
+    const char *antenna_power = kUnknown, *sbas_mode = kUnknown, *sbas_system = kUnknown;
+    int max_cno = -1, seen = -1, no_signal = -1, searching = -1, acquired = -1, unusable = -1, locked = -1;
+    int ephemeris = -1, used = -1, healthy = -1, unhealthy = -1, sbas_satellites = -1, prc_cm = -1, ic_cm = -1;
+    if (UbloxMAXM10* m10 = gnss->M10()) {
+        uint32_t now_ms = get_time_since_boot_ms();
+        const UbloxMAXM10::Version& version = m10->version();
+        if (version.module[0]) module = version.module;
+        if (version.software[0]) software = version.software;
+        if (version.hardware[0]) hardware = version.hardware;
+        if (m10->rf().IsFresh(now_ms)) {
+            antenna = M10Strings::AntennaStatus(m10->rf().value.antenna_status);
+            antenna_power = M10Strings::AntennaPower(m10->rf().value.antenna_power);
+        }
+        if (m10->satellites().IsFresh(now_ms)) {
+            const M10Diagnostics::SatelliteSummary& s = m10->satellites().value;
+            max_cno = s.max_cno_dbhz, seen = s.count, no_signal = s.no_signal, searching = s.searching;
+            acquired = s.acquired, unusable = s.unusable, locked = s.locked, ephemeris = s.ephemeris;
+            used = s.used, healthy = s.healthy, unhealthy = s.unhealthy;
+        }
+        if (m10->sbas().IsFresh(now_ms)) {
+            const M10Diagnostics::SbasStatus& sbas = m10->sbas().value;
+            sbas_mode = M10Strings::SbasMode(sbas.mode);
+            sbas_system = M10Strings::SbasSystem(sbas.system);
+            sbas_satellites = sbas.count;
+            if (const M10Diagnostics::SbasSatellite* sv = sbas.FirstCorrected()) {
+                prc_cm = sv->range_correction_cm;
+                ic_cm = sv->ionosphere_correction_cm;
+            }
+        }
+        if (m10->sbas_known_configured()) {
+            bbr = "OK";
+        }
+    }
+    CPP_AT_CMD_PRINTF("=%s,%s,%s,%s,%.2f,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s,%s,%d,%d,%d", module, software,
+                      hardware, bbr, gnss->fix().hdop, antenna, antenna_power, max_cno, seen, no_signal, searching, acquired, unusable, locked,
+                      ephemeris, used, healthy, unhealthy, sbas_mode, sbas_system, sbas_satellites, prc_cm, ic_cm);
     CPP_AT_SILENT_SUCCESS();
 }
 
@@ -494,7 +524,7 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSDiagCallback) {
     }
     if (m10->sbas().valid) {
         const M10Diagnostics::SbasStatus& sbas = m10->sbas().value;
-        CPP_AT_PRINTF("SBAS: age=%lums mode=%s system=%s geo=%u service=0x%02X corrected=%u flags=0x%02X\r\n",
+        CPP_AT_PRINTF("SBAS: age=%lums mode=%s system=%s geo=%u service=0x%02X satellites=%u flags=0x%02X\r\n",
                           static_cast<unsigned long>(now_ms - m10->sbas().received_ms), M10Strings::SbasMode(sbas.mode),
                           M10Strings::SbasSystem(sbas.system), sbas.geo, sbas.service, sbas.count, sbas.flags);
         for (uint8_t i = 0; i < sbas.count && i < M10Diagnostics::kStoredSbasSatellites; i++) {
@@ -1636,6 +1666,36 @@ CPP_AT_HELP_CALLBACK(CommsManager::ATOTAHelpCallback) {
         "reached.\r\n");
 }
 
+CPP_AT_CALLBACK(CommsManager::ATLogCategoryCallback) {
+    switch (op) {
+        case '?':
+            CPP_AT_PRINTF("%s=", def.command.data());
+            if (log_categories_.count() == 0) CPP_AT_PRINTF("%s", LogCategoryFilter::kAll.data());
+            for (uint8_t i = 0; i < log_categories_.count(); i++) {
+                std::string_view prefix = log_categories_.prefix(i);
+                CPP_AT_PRINTF(i == 0 ? "%.*s" : ",%.*s", static_cast<int>(prefix.length()), prefix.data());
+            }
+            CPP_AT_PRINTF("\r\n");
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=':
+            switch (log_categories_.Set(args, num_args)) {
+                case LogCategoryFilter::kOk:
+                    CPP_AT_SUCCESS();
+                case LogCategoryFilter::kTooMany:
+                    CPP_AT_ERROR("At most %u log categories are supported.", LogCategoryFilter::kMaxPrefixes);
+                case LogCategoryFilter::kTooLong:
+                    CPP_AT_ERROR("A log category is at most %u characters.", LogCategoryFilter::kPrefixMaxLen);
+                case LogCategoryFilter::kEmpty:
+                    CPP_AT_ERROR("A log category must not be empty.");
+                case LogCategoryFilter::kAllNotAlone:
+                    CPP_AT_ERROR("* cannot be combined with other log categories.");
+            }
+            break;
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
 CPP_AT_CALLBACK(CommsManager::ATLogLevelCallback) {
     switch (op) {
         case '?':
@@ -2741,10 +2801,18 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .max_args = 0,
      .help_string = "AT+GNSS_FIX?\r\n\tReturn fix validity, latitude and longitude in degrees, altitude in feet, "
                     "heading in degrees true, groundspeed in knots, active satellites, UTC time, PPS count "
-                    "since the last GNSS enable or disable operation, UTC epoch in ms, antenna status, SBAS system, "
-                    "satellites with SBAS corrections, and the first satellite's pseudorange and ionosphere corrections "
-                    "in cm (-1 when none). Antenna and SBAS fields come from the M10 and read UNKNOWN elsewhere.",
+                    "since the last GNSS enable or disable operation and UTC epoch in ms.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSFixCallback, comms_manager)},
+    {.command = "GNSS_STATUS",
+     .min_args = 0,
+     .max_args = 0,
+     .help_string =
+         "AT+GNSS_STATUS?\r\n\tReturn module, software version, hardware version, HDOP, antenna status "
+         "[INIT DONTKNOW OK SHORT OPEN], antenna power [OFF ON DONTKNOW], best C/N0 in dBHz, satellites seen, then satellites with no signal, searching, acquired, unusable, locked, with "
+         "ephemeris, used, healthy and unhealthy, SBAS mode, SBAS system, satellites in the SBAS report, and the "
+         "first corrected satellite's pseudorange and ionosphere corrections in cm. Reads stored records only. "
+         "Missing or older than 15 s reads -1 or UNKNOWN. Everything but HDOP comes from the M10.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSStatusCallback, comms_manager)},
     {.command = "GNSS_DIAG",
      .min_args = 0,
      .max_args = 0,
@@ -2779,6 +2847,15 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .help_string = "AT+LED_ENABLE=<enabled>\r\n\tEnable or disable the hardware status/activity "
                     "LEDs.\r\n\tAT+LED_ENABLE?\r\n\tQuery whether the hardware LEDs are enabled.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATLEDEnableCallback, comms_manager)},
+    {.command = "LOG_CATEGORY",
+     .min_args = 0,
+     .max_args = CppAT::kMaxNumArgs,
+     .help_string =
+         "AT+LOG_CATEGORY=<prefix>[,<prefix>...]\r\n\tPrint only INFO and WARNING lines whose tag starts with one of "
+         "up to 8 prefixes of at most 64 characters, e.g. UbloxMAXM10,ESP32SerialFlasher. Errors always print. Not "
+         "saved.\r\n\t"
+         "AT+LOG_CATEGORY=*\r\n\tPrint every category (default).\r\n\tAT+LOG_CATEGORY?\r\n\tQuery the categories.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATLogCategoryCallback, comms_manager)},
     {.command = "LOG_LEVEL",
      .min_args = 0,
      .max_args = 1,

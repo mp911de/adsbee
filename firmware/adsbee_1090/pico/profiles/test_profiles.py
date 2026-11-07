@@ -73,7 +73,7 @@ class BuildProfiles(unittest.TestCase):
         self.assertEqual(len(entries), len(selected), "Duplicate message keys")
         self.assertEqual(set(selected), expected)
         self.assertEqual({key: rate for key, rate in selected.items() if rate},
-                         {0x209100bb: 1, 0x209100ac: 1, 0x2091006b: 5, 0x2091035a: 5})
+                         {0x209100bb: 1, 0x209100ac: 1, 0x20910016: 5, 0x2091006b: 5, 0x2091035a: 5})
 
     def test_build_and_flash_variants(self):
         for profile, suffix in [(None, ""), ("default", ""), ("airgrep", "-airgrep")]:

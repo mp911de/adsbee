@@ -1,4 +1,4 @@
-#include "m10_telemetry.hh"
+#include "ublox_max_m10_telemetry.hh"
 
 #include <string>
 #include <vector>

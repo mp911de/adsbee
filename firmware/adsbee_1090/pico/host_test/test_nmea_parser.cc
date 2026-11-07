@@ -31,6 +31,7 @@ TEST(NMEAParser, ParsesGPGGA) {
     EXPECT_TRUE(fix.valid);
     EXPECT_EQ(fix.num_satellites, 8);
     EXPECT_EQ(fix.fix_quality, 1);
+    EXPECT_FLOAT_EQ(fix.hdop, 0.9f);
     EXPECT_NEAR(fix.latitude_deg, 48.1173f, 0.001f);
     EXPECT_NEAR(fix.longitude_deg, 11.5167f, 0.001f);
     EXPECT_NEAR(fix.altitude_ft, static_cast<int32_t>(545.4f * 3.28084f), 2);
@@ -85,6 +86,7 @@ TEST(NMEAParser, ParsesAT6558StartupStream) {
     EXPECT_FALSE(parser.fix().valid);
     EXPECT_EQ(parser.fix().fix_quality, 0);
     EXPECT_EQ(parser.fix().num_satellites, 0);
+    EXPECT_FLOAT_EQ(parser.fix().hdop, 25.5f);
     EXPECT_TRUE(parser.fix().utc_time_valid);
     EXPECT_EQ(parser.fix().utc_hour, 0);
     EXPECT_EQ(parser.fix().utc_minute, 55);
