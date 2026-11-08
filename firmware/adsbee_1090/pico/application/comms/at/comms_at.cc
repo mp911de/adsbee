@@ -2552,6 +2552,7 @@ CPP_AT_CALLBACK(CommsManager::ATWiFiAPCallback) {
                 cns.wifi_ap_channel = channel;
                 CPP_AT_CMD_PRINTF(": wifi_ap_channel = %d\r\n", cns.wifi_ap_channel);
             }
+            settings_manager.SyncToCoprocessors();
             CPP_AT_SUCCESS();
             break;
         }
