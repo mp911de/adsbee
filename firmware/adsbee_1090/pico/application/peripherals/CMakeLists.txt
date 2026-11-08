@@ -21,6 +21,7 @@ else()
         gnss/ubx_parser.cc
         gnss/ublox_max_m10_diagnostics.cc
         gnss/ublox_max_m10_telemetry.cc
+        gnss/airgrep_gnss_frame.cc
         gnss/gnss_receiver.cc
         gnss/generic_gnss_receiver.cc
         gnss/ublox_max_m10.cc

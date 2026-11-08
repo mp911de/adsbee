@@ -105,6 +105,9 @@ class CommsManager {
     CPP_AT_CALLBACK(ATGNSSFixCallback);
     CPP_AT_CALLBACK(ATGNSSStatusCallback);
     CPP_AT_CALLBACK(ATGNSSDiagCallback);
+#ifdef AIRGREP
+    CPP_AT_CALLBACK(ATTimePingCallback);
+#endif
     CPP_AT_CALLBACK(ATHostnameCallback);
     CPP_AT_CALLBACK(ATIPModeCallback);
     CPP_AT_CALLBACK(ATLEDBlinkCallback);
@@ -151,6 +154,8 @@ class CommsManager {
 
     void HandleCommsUARTIRQ();
     void UpdateGNSSDiagnostics();
+    // Pushes one #GNSS frame per second to every AIRGREP output. Compiled only in the airgrep profile.
+    void UpdateGNSSReport();
     SettingsManager::SerialInterface ATReplyInterface() const {
         return at_source_ == ATSource::kUART ? SettingsManager::kCommsUART : SettingsManager::kConsole;
     }
@@ -323,6 +328,8 @@ class CommsManager {
     // Single shared timer for all locally-decoded dictionary report protocols (CSBee, MAVLINK, GDL90).
     // All protocols share a UID snapshot and therefore share a reporting interval.
     uint32_t last_locally_decoded_report_timestamp_ms_ = 0;
+    static constexpr uint32_t kGNSSReportIntervalMs = 1000;
+    uint32_t last_gnss_report_timestamp_ms_ = 0;
 
     // Shared UID snapshot for all periodic dictionary reporting protocols.
     // One array avoids duplicating 800 bytes per protocol. UpdateReporting populates it once

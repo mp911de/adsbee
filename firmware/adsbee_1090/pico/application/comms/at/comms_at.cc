@@ -27,6 +27,7 @@
 #include "settings_hash.hh"
 #include "spi_coprocessor.hh"  // For init / de-init before and after flashing ESP32.
 #include "gnss_interface.hh"   // For parking/restoring the GNSS UART around ESP32 flashing.
+#include "airgrep_gnss_frame.hh"
 
 #ifdef HARDWARE_UNIT_TESTS
 #include "hardware_unit_tests.hh"
@@ -464,6 +465,22 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
                       static_cast<unsigned long>(gnss->pps_count()), utc_epoch);
     CPP_AT_SILENT_SUCCESS();
 }
+
+#ifdef AIRGREP
+// Reply latency is the measurement, so nothing here touches a bus or logs.
+CPP_AT_CALLBACK(CommsManager::ATTimePingCallback) {
+    if (op != '=' || !CPP_AT_HAS_ARG(0)) CPP_AT_ERROR("Only AT+TIME_PING=<echo> is supported.");
+    AirgrepTimePing ping{.echo = args[0]};
+    if (gnss) {
+        ping.epoch_valid = gnss->GetUTCUnixMs(ping.epoch_ms);
+        ping.pps_count = gnss->pps_count();
+    }
+    char reply[AirgrepTimePing::kReplyMaxLen + 1];
+    if (!ping.Format(reply, sizeof(reply))) CPP_AT_ERROR("Echo must be 1 to 20 decimal digits.");
+    CPP_AT_PRINTF("%s", reply);
+    CPP_AT_SUCCESS();
+}
+#endif
 
 CPP_AT_CALLBACK(CommsManager::ATGNSSStatusCallback) {
     if (op != '?') CPP_AT_ERROR("Only AT+GNSS_STATUS? is supported.");
@@ -2813,6 +2830,14 @@ const CppAT::ATCommandDef_t at_command_list[] = {
          "first corrected satellite's pseudorange and ionosphere corrections in cm. Reads stored records only. "
          "Missing or older than 15 s reads -1 or UNKNOWN. Everything but HDOP comes from the M10.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSStatusCallback, comms_manager)},
+#ifdef AIRGREP
+    {.command = "TIME_PING",
+     .min_args = 1,
+     .max_args = 1,
+     .help_string = "AT+TIME_PING=<echo>\r\n\tReturn the echo token (1 to 20 decimal digits) unchanged, the PPS "
+                    "disciplined UTC epoch in ms (empty when unavailable) and the PPS count, then OK.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATTimePingCallback, comms_manager)},
+#endif
     {.command = "GNSS_DIAG",
      .min_args = 0,
      .max_args = 0,

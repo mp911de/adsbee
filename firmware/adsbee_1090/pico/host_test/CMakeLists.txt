@@ -74,6 +74,8 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_diagnostics.cc
         test_m10_telemetry.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_telemetry.cc
+        test_airgrep_gnss_frame.cc
+        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/airgrep_gnss_frame.cc
         test_pps_clock.cc
         test_flarm.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc

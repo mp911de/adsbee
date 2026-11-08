@@ -32,15 +32,22 @@ std::string Payload(const std::string& frame) {
     EXPECT_EQ(frame.substr(frame.size() - 2), "\r\n");
     size_t start = 0;
     for (int i = 0; i < 5; ++i) start = frame.find(':', start) + 1;
-    size_t star = frame.rfind('*');
-    auto payload = frame.substr(start, star - start);
+    size_t comma = frame.rfind(',');
+    auto payload = frame.substr(start, comma - start);
     EXPECT_EQ(std::stoul(frame.substr(5)), payload.size());
-    EXPECT_EQ(std::stoul(frame.substr(star + 1), nullptr, 16),
-              CalculateCRC16(reinterpret_cast<const uint8_t*>(frame.data()), star));
+    EXPECT_EQ(std::stoul(frame.substr(comma + 1), nullptr, 16),
+              CalculateCRC16(reinterpret_cast<const uint8_t*>(frame.data()), comma + 1));
     return payload;
 }
 
 }  // namespace
+
+TEST(M10Telemetry, UsesCSBeeChecksumFormattingWithoutLeadingZeros) {
+    Rig d;
+    d.SetEnabled(true);
+    d.Feed(UBX(4, 1, "5"));
+    EXPECT_EQ(Next(d), "#M10:1:WARN:00:01/01:5,72B\r\n");
+}
 
 TEST(M10Telemetry, DisabledAndUnknownMessagesAreSilent) {
     Rig d;
@@ -173,7 +180,7 @@ TEST(M10Telemetry, MonFieldOrderSignedValuesAndKnownCRC) {
     payload[22] = 100;
     payload[24] = 100;
     d.Feed(UBX(0x0A, 0x38, payload));
-    EXPECT_EQ(Next(d), "#M10:33:MON:00:01/01:0,0,1,2,1,0,50,4000,0,0,100,0,100*BF08\r\n");
+    EXPECT_EQ(Next(d), "#M10:33:MON:00:01/01:0,0,1,2,1,0,50,4000,0,0,100,0,100,E6DB\r\n");
     payload[21] = static_cast<char>(-128);
     payload[23] = static_cast<char>(-1);
     d.Feed(UBX(0x0A, 0x38, payload));

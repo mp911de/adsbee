@@ -91,8 +91,9 @@ size_t M10Telemetry::NextFrame(char* frame, size_t capacity) {
                           active_kind_, active_id_, part_, count_);
     memcpy(frame + header, payload, used);
     size_t length = header + used;
+    frame[length++] = ',';
     uint16_t crc = CalculateCRC16(reinterpret_cast<const uint8_t*>(frame), length);
-    int tail = snprintf(frame + length, capacity - length, "*%04X\r\n", crc);
+    int tail = snprintf(frame + length, capacity - length, "%X\r\n", crc);
     if (part_++ == count_) active_kind_ = nullptr;
     return length + tail;
 }

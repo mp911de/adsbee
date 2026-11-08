@@ -9,6 +9,7 @@
 #include "hardware/irq.h"
 #include "spi_coprocessor.hh"
 #include "gnss_interface.hh"
+#include "airgrep_gnss_frame.hh"
 
 static const CommsManager::ReportSink kReportingSinks[] = {SettingsManager::SerialInterface::kConsole,
                                                            SettingsManager::SerialInterface::kCommsUART};
@@ -60,6 +61,9 @@ bool CommsManager::Update() {
     UpdateAT();
     UpdateNetworkConsole();
     UpdateGNSSDiagnostics();
+#ifdef AIRGREP
+    UpdateGNSSReport();
+#endif
 
     uint32_t timestamp_ms = get_time_since_boot_ms();
     if (timestamp_ms - last_raw_report_check_timestamp_ms_ > kRawReportingCheckIntervalMs) {
@@ -108,6 +112,33 @@ void CommsManager::UpdateGNSSDiagnostics() {
     for (uint16_t i = 0; i < count; ++i) sent &= SendBuf(sinks[i], frame, length);
     if (!sent) telemetry->DropActive();
 }
+
+#ifdef AIRGREP
+void CommsManager::UpdateGNSSReport() {
+    uint32_t now_ms = get_time_since_boot_ms();
+    if (at_command_active_ || !gnss || now_ms - last_gnss_report_timestamp_ms_ < kGNSSReportIntervalMs) return;
+    last_gnss_report_timestamp_ms_ = now_ms;
+    AirgrepGnssFrame report{.fix = gnss->fix(), .fix_valid = gnss->HasValidFix()};
+    report.epoch_valid = gnss->GetUTCUnixMs(report.epoch_ms);
+    if (UbloxMAXM10* m10 = gnss->M10()) {
+        if (m10->rf().IsFresh(now_ms)) report.rf = &m10->rf().value;
+        if (m10->satellites().IsFresh(now_ms)) report.satellites = &m10->satellites().value;
+        if (m10->sbas().IsFresh(now_ms)) report.sbas = &m10->sbas().value;
+        report.module = m10->version().module;
+        report.software = m10->version().software;
+        report.hardware = m10->version().hardware;
+        report.bbr_ok = m10->sbas_known_configured();
+    }
+    char frame[AirgrepGnssFrame::kFrameMaxLen + 1];
+    size_t length = report.Format(frame, sizeof(frame));
+    if (!length) return;
+    for (auto sink : kReportingSinks) {
+        if (settings_manager.settings.reporting_protocols[sink] == SettingsManager::kAirgrep) {
+            SendBuf(sink, frame, length);
+        }
+    }
+}
+#endif
 
 bool CommsManager::ForceFlushRawPackets() {
     for (uint16_t i = 0; i < kMaxForceFlushIterations; i++) {
