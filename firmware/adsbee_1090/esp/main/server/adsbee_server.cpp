@@ -275,7 +275,7 @@ bool ADSBeeServer::Update() {
     }
     if (received_rp2040_metrics ||
         timestamp_ms - last_aircraft_dictionary_update_timestamp_ms_ > kAircraftDictionaryUpdateFallbackIntervalMs) {
-        if (object_dictionary.composite_device_status.rp2040.rx_position_available) {
+        if (object_dictionary.CurrentRP2040Status().rx_position_available) {
             aircraft_dictionary.SetReferencePosition(
                 object_dictionary.composite_device_status.rp2040.rx_position.latitude_deg,
                 object_dictionary.composite_device_status.rp2040.rx_position.longitude_deg);
@@ -490,10 +490,10 @@ bool ADSBeeServer::ReportGDL90() {
 
     // Build the ownship report up front from the receiver position pushed up by the RP2040. Its validity also
     // drives the heartbeat's GPS Position Valid flag, which some EFBs require before they will show ownship.
-    const ObjectDictionary::RP2040DeviceStatus& rp2040_status = object_dictionary.composite_device_status.rp2040;
+    const ObjectDictionary::RP2040DeviceStatus rp2040_status = object_dictionary.CurrentRP2040Status();
     GDL90Reporter::GDL90TargetReportData ownship_data;
-    bool have_position = GDL90Reporter::BuildOwnshipReportData(ownship_data, rp2040_status.rx_position,
-                                                               rp2040_status.rx_position_available);
+    bool have_position = GDL90Reporter::BuildOwnshipReportData(
+        ownship_data, rp2040_status.rx_position, rp2040_status.rx_position_available, rp2040_status.ownship);
 
     // Heartbeat status flags are sticky members of the shared GDL90Reporter, so set them on every report.
     gdl90.gnss_position_valid = have_position;
@@ -502,10 +502,21 @@ bool ADSBeeServer::ReportGDL90() {
 
     // Heartbeat Message
     message.len = gdl90.WriteGDL90HeartbeatMessage(
-        message.data, CommsManager::NetworkMessage::kMaxLenBytes, get_time_since_boot_ms() / 1000,
+        message.data, CommsManager::NetworkMessage::kMaxLenBytes,
+        GDL90Reporter::HeartbeatTimestamp(rp2040_status.gnss_utc_time_valid, rp2040_status.gnss_utc_unix_ms,
+                                          get_time_since_boot_ms()),
         aircraft_dictionary.metrics.valid_squitter_frames + aircraft_dictionary.metrics.valid_extended_squitter_frames +
             aircraft_dictionary.metrics.valid_uat_adsb_frames,  // ADS-B message count includes UAT ADS-B messages.
         aircraft_dictionary.metrics.valid_uat_uplink_frames);
+    comms_manager.WiFiAccessPointSendMessageToAllStations(message);
+    message.len = 0;
+
+    // ForeFlight ID Message
+    char version[sizeof(GDL90Reporter::ForeFlightIDData::device_long_name)];
+    ObjectDictionary::FormatFirmwareVersion(version, sizeof(version));
+    message.len = gdl90.WriteForeFlightIDMessage(
+        message.data, CommsManager::NetworkMessage::kMaxLenBytes,
+        GDL90Reporter::BuildForeFlightIDData(settings_manager.settings.feed_receiver_ids[0], version));
     comms_manager.WiFiAccessPointSendMessageToAllStations(message);
     message.len = 0;
 
@@ -514,6 +525,14 @@ bool ADSBeeServer::ReportGDL90() {
                                                       ownship_data, true);
     comms_manager.WiFiAccessPointSendMessageToAllStations(message);
     message.len = 0;
+
+    // ForeFlight AHRS Message
+    if (rp2040_status.ownship.ahrs_valid) {
+        message.len = gdl90.WriteForeFlightAHRSMessage(message.data, CommsManager::NetworkMessage::kMaxLenBytes,
+                                                       GDL90Reporter::BuildForeFlightAHRSData(rp2040_status.ownship));
+        comms_manager.WiFiAccessPointSendMessageToAllStations(message);
+        message.len = 0;
+    }
 
     // Traffic Reports
     int16_t aircraft_index = -1;  // Just used for error reporting.

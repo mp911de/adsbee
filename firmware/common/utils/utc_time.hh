@@ -4,6 +4,20 @@
 #include <cstdint>
 #include <ctime>
 
+static constexpr uint32_t kSecondsPerDay = 86400;
+
+/**
+ * Seconds since 0000Z of a UTC timestamp.
+ * @param[in] utc_unix_ms Milliseconds since the Unix epoch.
+ * @retval Seconds in [0, 86400).
+ */
+inline uint32_t UTCSecondsOfDay(uint64_t utc_unix_ms) {
+    time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
+    struct tm utc;
+    gmtime_r(&utc_s, &utc);
+    return (utc.tm_hour * 60 + utc.tm_min) * 60 + utc.tm_sec;
+}
+
 /**
  * Formats a UTC timestamp with strftime.
  * @param[in] utc_unix_ms Milliseconds since the Unix epoch.

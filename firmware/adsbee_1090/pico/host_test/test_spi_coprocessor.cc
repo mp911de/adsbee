@@ -1,4 +1,7 @@
+#include <string>
+
 #include "gtest/gtest.h"
+#include "object_dictionary.hh"
 #include "spi_coprocessor.hh"
 #include "spi_coprocessor_packet.hh"
 
@@ -229,4 +232,51 @@ TEST(SPICoprocessorPacket, SCReadRequestPacketRejectsWrongLengthWithoutOverflow)
     ASSERT_TRUE(guarded.packet.IsValid());
     guarded.packet.ConstructFromBuffer(buf, 3);
     EXPECT_FALSE(guarded.packet.IsValid());
+}
+
+TEST(ObjectDictionary, RP2040DeviceStatusAgedBy) {
+    Ownship ownship;
+    ASSERT_TRUE(ownship.SetIdentity(0xABC123, "N123", 1));
+    ownship.SetBaro(4500, true, -320, 0);
+    ASSERT_TRUE(ownship.SetAHRS(2.5f, -1.0f, NAN, false, -1, -1, 0));
+    ObjectDictionary::RP2040DeviceStatus status;
+    status.rx_position_available = true;
+    status.gnss_fix_valid = true;
+    status.gnss_utc_time_valid = true;
+    status.gnss_utc_unix_ms = 1709251199000ULL;
+    status.ownship = ownship.Get(0);
+
+    // A fresh status keeps its values, with UTC brought forward.
+    ObjectDictionary::RP2040DeviceStatus aged = status.AgedBy(ObjectDictionary::RP2040DeviceStatus::kMaxAgeMs);
+    EXPECT_TRUE(aged.rx_position_available);
+    EXPECT_TRUE(aged.gnss_fix_valid);
+    EXPECT_TRUE(aged.gnss_utc_time_valid);
+    EXPECT_EQ(aged.gnss_utc_unix_ms, 1709251200000ULL);
+    EXPECT_TRUE(aged.ownship.baro_valid);
+    EXPECT_TRUE(aged.ownship.ahrs_valid);
+
+    // A silent sender loses everything that claimed to be current. The identity stays.
+    aged = status.AgedBy(ObjectDictionary::RP2040DeviceStatus::kMaxAgeMs + 1);
+    EXPECT_FALSE(aged.rx_position_available);
+    EXPECT_FALSE(aged.gnss_fix_valid);
+    EXPECT_FALSE(aged.gnss_utc_time_valid);
+    EXPECT_FALSE(aged.ownship.baro_valid);
+    EXPECT_FALSE(aged.ownship.vertical_rate_valid);
+    EXPECT_FALSE(aged.ownship.ahrs_valid);
+    EXPECT_EQ(aged.ownship.address, 0xABC123u);
+    EXPECT_STREQ(aged.ownship.callsign, "N123");
+}
+
+TEST(ObjectDictionary, FormatFirmwareVersion) {
+    char version[32];
+    char expected[32];
+    int len = snprintf(expected, sizeof(expected), "%u.%u.%u", ObjectDictionary::kFirmwareVersionMajor,
+                       ObjectDictionary::kFirmwareVersionMinor, ObjectDictionary::kFirmwareVersionPatch);
+    if (ObjectDictionary::kFirmwareVersionReleaseCandidate != 0) {
+        snprintf(expected + len, sizeof(expected) - len, "-rc%u", ObjectDictionary::kFirmwareVersionReleaseCandidate);
+    }
+    ObjectDictionary::FormatFirmwareVersion(version, sizeof(version), "");
+    EXPECT_STREQ(version, expected);
+    ObjectDictionary::FormatFirmwareVersion(version, sizeof(version), "40e2a88-dirty");
+    EXPECT_STREQ(version, (std::string(expected) + "-40e2a88-dirty").c_str());
 }

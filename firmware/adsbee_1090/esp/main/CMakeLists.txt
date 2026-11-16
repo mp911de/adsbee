@@ -75,6 +75,11 @@ idf_component_register(
         "server/web/favicon.png"
 )
 
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/${COMMON_DIR}/cmake/git_commit.cmake)
+    target_include_directories(${COMPONENT_LIB} PRIVATE ${ADSBEE_GIT_COMMIT_INCLUDE_DIR})
+endif()
+
 # Text web assets are served pre-compressed (Content-Encoding: gzip), roughly a quarter of the flash and airtime.
 set(WEB_GZ_DIR "${CMAKE_CURRENT_BINARY_DIR}/web")
 file(MAKE_DIRECTORY "${WEB_GZ_DIR}")

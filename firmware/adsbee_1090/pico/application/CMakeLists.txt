@@ -1,6 +1,8 @@
 if (ON_EMBEDDED_DEVICE)
     ## Building for target.
     add_executable(application main.cc)
+    include(${ADSBEE_COMMON_DIR}/cmake/git_commit.cmake)
+    target_include_directories(application PRIVATE ${ADSBEE_GIT_COMMIT_INCLUDE_DIR})
 
     add_subdirectory(${ADSBEE_COMMON_DIR} ${CMAKE_BINARY_DIR}/application/adsbee_common)
 

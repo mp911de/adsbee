@@ -685,12 +685,78 @@ TEST(GDL90Utils, BuildForeFlightIDData) {
     GDL90Reporter::ForeFlightIDData data = GDL90Reporter::BuildForeFlightIDData(receiver_id, "0.9.1");
     EXPECT_EQ(data.serial_number, 0xBEE0010203040506);
     EXPECT_STREQ(data.device_name, "ADSBee");
-    EXPECT_STREQ(data.device_long_name, "ADSBee 0.9.1");
+    EXPECT_STREQ(data.device_long_name, "0.9.1");
     EXPECT_TRUE(data.geometric_altitude_is_msl);
     EXPECT_EQ(data.internet_policy, GDL90Reporter::ForeFlightIDData::kInternetPolicyUnrestricted);
 
-    data = GDL90Reporter::BuildForeFlightIDData(receiver_id, "10.11.12-rc13");
-    EXPECT_STREQ(data.device_long_name, "ADSBee 10.11.12-");  // Truncated to 16 bytes.
+    data = GDL90Reporter::BuildForeFlightIDData(receiver_id, "0.9.1-rc11-40e2a88-dirty");
+    EXPECT_STREQ(data.device_long_name, "0.9.1-rc11-40e2a");  // Truncated to 16 bytes.
+}
+
+TEST(GDL90Utils, HeartbeatTimestamp) {
+    EXPECT_EQ(GDL90Reporter::HeartbeatTimestamp(true, 1709251199999ULL, 5000), 86399u);  // 2024-02-29T23:59:59.999Z.
+    EXPECT_EQ(GDL90Reporter::HeartbeatTimestamp(true, 1798761604501ULL, 5000), 4u);      // 2027-01-01T00:00:04.501Z.
+    // Without UTC, uptime stands in and wraps daily like UTC.
+    EXPECT_EQ(GDL90Reporter::HeartbeatTimestamp(false, 1709251199999ULL, 5999), 5u);
+    EXPECT_EQ(GDL90Reporter::HeartbeatTimestamp(false, 0, 36 * 3600 * 1000), 12u * 3600);
+    EXPECT_EQ(GDL90Reporter::HeartbeatTimestamp(false, 0, 48 * 3600 * 1000), 0u);
+}
+
+TEST(GDL90Utils, HeartbeatTimestampFitsSeventeenBits) {
+    uint8_t framed[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    uint8_t payload[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    struct {
+        uint32_t timestamp;
+        uint32_t expected;
+    } cases[] = {{70000, 70000}, {86399, 86399}, {86400, 0}, {131072, 44672}, {UINT32_MAX, UINT32_MAX % 86400}};
+    for (const auto& c : cases) {
+        uint16_t len = gdl90.WriteGDL90HeartbeatMessage(framed, sizeof(framed), c.timestamp, 0, 0);
+        ASSERT_EQ(UnframeGDL90Message(framed, len, payload), 7);
+        uint32_t encoded = ((payload[2] >> 7) << 16) | (payload[4] << 8) | payload[3];
+        EXPECT_EQ(encoded, c.expected) << "timestamp=" << c.timestamp;
+    }
+}
+
+TEST(GDL90Utils, OwnshipReportUsesOwnshipIdentityAndBaro) {
+    SettingsManager::RxPosition rx_position;
+    rx_position.source = SettingsManager::RxPosition::kPositionSourceGNSS;
+    rx_position.latitude_deg = 37.5f;
+    rx_position.speed_kts = 45;
+    Ownship ownship;
+    ASSERT_TRUE(ownship.SetIdentity(0xABC123, "n123", 1));
+    ownship.SetBaro(4500, true, -320, 0);
+
+    GDL90Reporter::GDL90TargetReportData data;
+    ASSERT_TRUE(GDL90Reporter::BuildOwnshipReportData(data, rx_position, true, ownship.Get(0)));
+    EXPECT_EQ(data.address_type, GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithICAOAddress);
+    EXPECT_EQ(data.participant_address, 0xABC123u);
+    EXPECT_STREQ(data.callsign, "N123    ");
+    EXPECT_EQ(data.emitter_category, 1);
+    EXPECT_EQ(data.altitude_ft, 4500);
+    EXPECT_EQ(data.vertical_rate_fpm, -320);
+
+    // Without a position the report still carries the identity, but no baro data.
+    ASSERT_FALSE(GDL90Reporter::BuildOwnshipReportData(data, rx_position, false, ownship.Get(0)));
+    EXPECT_EQ(data.participant_address, 0xABC123u);
+    EXPECT_STREQ(data.callsign, "N123    ");
+    EXPECT_EQ(data.altitude_ft, INT32_MIN);
+
+    // Expired baro data falls back to the receiver position rules: invalid for GNSS.
+    ASSERT_TRUE(GDL90Reporter::BuildOwnshipReportData(data, rx_position, true, ownship.Get(Ownship::kDataTimeoutMs)));
+    EXPECT_EQ(data.altitude_ft, INT32_MIN);
+    EXPECT_EQ(data.vertical_rate_fpm, GDL90Reporter::GDL90TargetReportData::kVerticalRateUnavailableFpm);
+}
+
+TEST(GDL90Utils, BuildForeFlightAHRSData) {
+    Ownship ownship;
+    ASSERT_TRUE(ownship.SetAHRS(2.5f, -1.0f, 271.0f, true, -1, 102, 0));
+    GDL90Reporter::ForeFlightAHRSData data = GDL90Reporter::BuildForeFlightAHRSData(ownship.Get(0));
+    EXPECT_FLOAT_EQ(data.roll_deg, 2.5f);
+    EXPECT_FLOAT_EQ(data.pitch_deg, -1.0f);
+    EXPECT_FLOAT_EQ(data.heading_deg, 271.0f);
+    EXPECT_TRUE(data.heading_is_magnetic);
+    EXPECT_EQ(data.indicated_airspeed_kts, -1);
+    EXPECT_EQ(data.true_airspeed_kts, 102);
 }
 
 TEST(GDL90Utils, UATTORTicksAre80Nanoseconds) {

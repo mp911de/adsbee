@@ -29,6 +29,7 @@
 #include "spi_coprocessor.hh"  // For init / de-init before and after flashing ESP32.
 #include "gnss_interface.hh"   // For parking/restoring the GNSS UART around ESP32 flashing.
 #include "airgrep_gnss_frame.hh"
+#include "ownship.hh"
 #include "utc_time.hh"
 
 #ifdef HARDWARE_UNIT_TESTS
@@ -464,6 +465,142 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
                       static_cast<long>(fix.speed_kts), static_cast<unsigned int>(fix.num_satellites), utc_time,
                       static_cast<unsigned long>(gnss->pps_count()), utc_epoch);
     CPP_AT_SILENT_SUCCESS();
+}
+
+// The only ownship position source today. The field exists so later sources fit without changing the command.
+static constexpr char kOwnshipSourceRxPosition[] = "RX_POSITION";
+
+// cppAT parses a positive number above INT32_MAX into a negative int32_t.
+static bool WrappedNegative(std::string_view arg, int32_t value) {
+    return value < 0 && arg.find('-') == std::string_view::npos;
+}
+
+CPP_AT_CALLBACK(CommsManager::ATOwnshipCallback) {
+    switch (op) {
+        case '?': {
+            Ownship::Snapshot s = ownship.Get(get_time_since_boot_ms());
+            char address[7] = "";
+            if (s.address != 0) snprintf(address, sizeof(address), "%06lX", static_cast<unsigned long>(s.address));
+            CPP_AT_CMD_PRINTF("=%s,%s,%s,%u", kOwnshipSourceRxPosition, address, s.callsign, s.emitter_category);
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        }
+        case '=': {
+            if (CPP_AT_HAS_ARG(0) && args[0].compare(kOwnshipSourceRxPosition) != 0) {
+                CPP_AT_ERROR("Invalid source %.*s.", static_cast<int>(args[0].size()), args[0].data());
+            }
+            uint32_t address = 0;
+            if (CPP_AT_HAS_ARG(1)) CPP_AT_TRY_ARG2NUM_BASE(1, address, 16);
+            char callsign[Ownship::kCallsignMaxLen + 1] = "";
+            if (CPP_AT_HAS_ARG(2)) {
+                if (args[2].size() > Ownship::kCallsignMaxLen) {
+                    CPP_AT_ERROR("Callsign longer than %u characters.", Ownship::kCallsignMaxLen);
+                }
+                memcpy(callsign, args[2].data(), args[2].size());
+            }
+            // Wider than the category, so cppAT cannot truncate an out of range value into range.
+            uint32_t category = 0;
+            if (CPP_AT_HAS_ARG(3)) CPP_AT_TRY_ARG2NUM(3, category);
+            if (!ownship.SetIdentity(address, callsign, category)) {
+                CPP_AT_ERROR("Address above FFFFFF, callsign not letters and digits, or category above %u.",
+                             Ownship::kEmitterCategoryMax);
+            }
+            CPP_AT_SUCCESS();
+            break;
+        }
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
+CPP_AT_CALLBACK(CommsManager::ATOwnshipBaroCallback) {
+    uint32_t now_ms = get_time_since_boot_ms();
+    switch (op) {
+        case '?': {
+            Ownship::Snapshot s = ownship.Get(now_ms);
+            unsigned long age_ms = ownship.BaroAgeMs(now_ms);
+            if (!s.baro_valid) {
+                CPP_AT_CMD_PRINTF("=,,");
+            } else if (s.vertical_rate_valid) {
+                CPP_AT_CMD_PRINTF("=%ld,%ld,%lu", static_cast<long>(s.baro_altitude_ft),
+                                  static_cast<long>(s.vertical_rate_fpm), age_ms);
+            } else {
+                CPP_AT_CMD_PRINTF("=%ld,,%lu", static_cast<long>(s.baro_altitude_ft), age_ms);
+            }
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        }
+        case '=': {
+            if (!CPP_AT_HAS_ARG(0)) {
+                CPP_AT_ERROR("Requires AT+OWNSHIP_BARO=<pressure_alt_ft>[,<vertical_rate_fpm>].");
+            }
+            int32_t altitude_ft;
+            CPP_AT_TRY_ARG2NUM(0, altitude_ft);
+            int32_t vertical_rate_fpm = 0;
+            if (CPP_AT_HAS_ARG(1)) CPP_AT_TRY_ARG2NUM(1, vertical_rate_fpm);
+            if (WrappedNegative(args[0], altitude_ft) ||
+                (CPP_AT_HAS_ARG(1) && WrappedNegative(args[1], vertical_rate_fpm))) {
+                CPP_AT_ERROR("Pressure altitude or vertical rate too large.");
+            }
+            ownship.SetBaro(altitude_ft, CPP_AT_HAS_ARG(1), vertical_rate_fpm, now_ms);
+            CPP_AT_SUCCESS();
+            break;
+        }
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
+CPP_AT_CALLBACK(CommsManager::ATOwnshipAHRSCallback) {
+    uint32_t now_ms = get_time_since_boot_ms();
+    switch (op) {
+        case '?': {
+            Ownship::Snapshot s = ownship.Get(now_ms);
+            if (!s.ahrs_valid) {
+                CPP_AT_CMD_PRINTF("=,,,,,,");
+                CPP_AT_SILENT_SUCCESS();
+            }
+            char fields[6][12] = {};
+            if (!std::isnan(s.roll_deg)) snprintf(fields[0], sizeof(fields[0]), "%.1f", s.roll_deg);
+            if (!std::isnan(s.pitch_deg)) snprintf(fields[1], sizeof(fields[1]), "%.1f", s.pitch_deg);
+            if (!std::isnan(s.heading_deg)) {
+                snprintf(fields[2], sizeof(fields[2]), "%.1f", s.heading_deg);
+                snprintf(fields[3], sizeof(fields[3]), "%c", s.heading_is_magnetic ? 'M' : 'T');
+            }
+            if (s.indicated_airspeed_kts >= 0) {
+                snprintf(fields[4], sizeof(fields[4]), "%ld", static_cast<long>(s.indicated_airspeed_kts));
+            }
+            if (s.true_airspeed_kts >= 0) {
+                snprintf(fields[5], sizeof(fields[5]), "%ld", static_cast<long>(s.true_airspeed_kts));
+            }
+            CPP_AT_CMD_PRINTF("=%s,%s,%s,%s,%s,%s,%lu", fields[0], fields[1], fields[2], fields[3], fields[4],
+                              fields[5], static_cast<unsigned long>(ownship.AHRSAgeMs(now_ms)));
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        }
+        case '=': {
+            float roll_deg = NAN, pitch_deg = NAN, heading_deg = NAN;
+            int32_t ias_kts = -1, tas_kts = -1;
+            if (CPP_AT_HAS_ARG(0)) CPP_AT_TRY_ARG2NUM(0, roll_deg);
+            if (CPP_AT_HAS_ARG(1)) CPP_AT_TRY_ARG2NUM(1, pitch_deg);
+            if (CPP_AT_HAS_ARG(2)) CPP_AT_TRY_ARG2NUM(2, heading_deg);
+            bool magnetic = CPP_AT_HAS_ARG(3) && args[3].compare("M") == 0;
+            if (CPP_AT_HAS_ARG(3) && !magnetic && args[3].compare("T") != 0) {
+                CPP_AT_ERROR("Heading type must be T or M.");
+            }
+            if (CPP_AT_HAS_ARG(2) != CPP_AT_HAS_ARG(3)) CPP_AT_ERROR("Heading and heading type go together.");
+            if (CPP_AT_HAS_ARG(4)) CPP_AT_TRY_ARG2NUM(4, ias_kts);
+            if (CPP_AT_HAS_ARG(5)) CPP_AT_TRY_ARG2NUM(5, tas_kts);
+            if (ias_kts < -1 || tas_kts < -1 ||
+                !ownship.SetAHRS(roll_deg, pitch_deg, heading_deg, magnetic, ias_kts, tas_kts, now_ms)) {
+                CPP_AT_ERROR(
+                    "No value given, roll or pitch outside [-180, 180], heading outside [0, 360), or "
+                    "airspeed outside [0, %ld].",
+                    static_cast<long>(Ownship::kAirspeedMaxKts));
+            }
+            CPP_AT_SUCCESS();
+            break;
+        }
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
 #ifdef AIRGREP
@@ -3033,6 +3170,36 @@ const CppAT::ATCommandDef_t at_command_list[] = {
      .max_args = 4,
      .help_callback = CPP_AT_BIND_MEMBER_HELP_CALLBACK(CommsManager::ATOTAHelpCallback, comms_manager),
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATOTACallback, comms_manager)},
+    {.command = "OWNSHIP",
+     .min_args = 0,
+     .max_args = 4,
+     .help_string =
+         "AT+OWNSHIP=<source [RX_POSITION]>,<address>,<callsign>,<category>\r\n\t"
+         "Ownship identity for GDL90, RAM only. address: hex ICAO address, empty for none (the EFB then detects "
+         "ownship itself). callsign: up to 8 letters and digits, empty for ADSBEE. category: GDL90 emitter category "
+         "0 to 39, empty for 0 (unknown). Position comes from AT+RX_POSITION (GNSS or ICAO).\r\n\t"
+         "AT+OWNSHIP?\r\n\t+OWNSHIP=RX_POSITION,ABC123,N123,1",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATOwnshipCallback, comms_manager)},
+    {.command = "OWNSHIP_AHRS",
+     .min_args = 0,
+     .max_args = 6,
+     .help_string =
+         "AT+OWNSHIP_AHRS=[roll_deg],[pitch_deg],[heading_deg],[T|M],[ias_kts],[tas_kts]\r\n\t"
+         "Attitude for the ForeFlight AHRS message, RAM only, expires after 5 s. Empty fields are sent as unknown, "
+         "at least one value is required. "
+         "Roll positive right wing down, pitch positive nose up, both -180 to 180. Heading 0 to <360, T true or M "
+         "magnetic, never track.\r\n\t"
+         "AT+OWNSHIP_AHRS?\r\n\t+OWNSHIP_AHRS=<roll>,<pitch>,<heading>,<T|M>,<ias>,<tas>,<age_ms>",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATOwnshipAHRSCallback, comms_manager)},
+    {.command = "OWNSHIP_BARO",
+     .min_args = 0,
+     .max_args = 2,
+     .help_string =
+         "AT+OWNSHIP_BARO=<pressure_alt_ft>[,<vertical_rate_fpm>]\r\n\t"
+         "Ownship pressure altitude (1013.25 hPa reference, not QNH corrected) for the GDL90 ownship report, RAM "
+         "only, expires after 5 s.\r\n\t"
+         "AT+OWNSHIP_BARO?\r\n\t+OWNSHIP_BARO=<pressure_alt_ft>,<vertical_rate_fpm>,<age_ms>",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATOwnshipBaroCallback, comms_manager)},
     {.command = "PROTOCOL_OUT",
      .min_args = 0,
      .max_args = 2,

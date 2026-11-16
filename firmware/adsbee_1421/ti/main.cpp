@@ -19,6 +19,7 @@ extern "C" {
 #include "hal.hh"  // For get_time_since_boot_us.
 #include "led.hh"
 #include "object_dictionary.hh"
+#include "ownship.hh"
 #include "packet_decoder.hh"
 #include "sub_ghz_radio.hh"
 #include "uat_packet_decoder.hh"
@@ -47,6 +48,7 @@ LEDs leds = LEDs({
 });
 
 ADSBee adsbee = ADSBee({});
+Ownship ownship;  // Never set here. The shared GDL90 reporting reads it.
 PacketDecoder packet_decoder;
 SubGHzRadio subg_radio({});
 UATPacketDecoder uat_packet_decoder;

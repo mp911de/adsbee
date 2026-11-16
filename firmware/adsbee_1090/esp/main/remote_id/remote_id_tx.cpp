@@ -143,8 +143,7 @@ bool RemoteIDTransmitter::RefreshFromDeviceState() {
     // Coded PHY and the WiFi beacon all encode from the s_uas_data populated here.
     const SettingsManager::RxPosition& pos = object_dictionary.composite_device_status.rp2040.rx_position;
     position_source_allowed_ = SettingsManager::RxPosition::MayBeTransmittedAsOwnPosition(pos.source);
-    position_valid_ =
-        object_dictionary.composite_device_status.rp2040.rx_position_available && position_source_allowed_;
+    position_valid_ = object_dictionary.CurrentRP2040Status().rx_position_available && position_source_allowed_;
 
     PopulateBasicID();
     PopulateLocation(position_valid_);

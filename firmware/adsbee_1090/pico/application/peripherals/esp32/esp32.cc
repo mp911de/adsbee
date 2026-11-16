@@ -168,6 +168,7 @@ bool ESP32::Update() {
                 .gnss_utc_unix_ms = utc_unix_ms,
                 .noise_floor_mv = static_cast<uint16_t>(adsbee.GetNoiseFloorMilliVolts()),
                 .noise_floor_dbm = static_cast<int16_t>(adsbee.GetNoiseFloordBm()),
+                .ownship = ownship.Get(status_timestamp_ms),
                 .r1090_rx_enabled = adsbee.Receiver1090IsEnabled(),
                 .subg_rx_enabled =
                     bsp.has_subg && adsbee.subg_radio_ll.IsEnabled() && settings_manager.settings.subg_rx_enabled,

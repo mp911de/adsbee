@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "../ownship.hh"
 #include "aircraft_dictionary.hh"
 #include "macros.hh"    // for MIN macro.
 #include "settings.hh"  // for SettingsManager::RxPosition.
@@ -157,6 +158,14 @@ class GDL90Reporter {
      */
     uint16_t WriteBufferWithGDL90Escapes(uint8_t* to_buf, uint16_t to_buf_num_bytes, const uint8_t* from_buf,
                                          uint16_t from_buf_num_bytes);
+    /**
+     * Heartbeat time stamp: UTC seconds since 0000Z, or uptime seconds wrapped the same way when UTC is unknown.
+     * @param[in] utc_valid Whether utc_unix_ms holds the current UTC.
+     * @param[in] utc_unix_ms Current UTC in milliseconds since the Unix epoch.
+     * @param[in] uptime_ms Milliseconds since boot.
+     * @retval Seconds in [0, 86400).
+     */
+    static uint32_t HeartbeatTimestamp(bool utc_valid, uint64_t utc_unix_ms, uint32_t uptime_ms);
 
     /**
      * Write a GDL90 Heartbeat message.
@@ -216,10 +225,11 @@ class GDL90Reporter {
     uint16_t WriteGDL90OwnshipGeoAltitudeMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
                                                  const OwnshipGeoAltitudeData& data);
     /**
-     * Populate a ForeFlight ID message for this device. The long name is GDL90_DEVICE_NAME and the version, truncated
-     * to 16 bytes. Geometric altitude is declared MSL since it comes from the GNSS GGA altitude.
+     * Populate a ForeFlight ID message for this device. The device name carries GDL90_DEVICE_NAME, so the long name
+     * carries the version, truncated to 16 bytes. Geometric altitude is declared MSL since it comes from the GNSS GGA
+     * altitude.
      * @param[in] receiver_id 8 byte unique receiver ID, used as the serial number, MSB first.
-     * @param[in] firmware_version Firmware version string, e.g. "0.9.1".
+     * @param[in] firmware_version Firmware version string, e.g. "0.9.1-rc11-40e2a88".
      */
     static ForeFlightIDData BuildForeFlightIDData(const uint8_t receiver_id[8], const char* firmware_version);
     uint16_t WriteForeFlightIDMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const ForeFlightIDData& data);
@@ -241,16 +251,20 @@ class GDL90Reporter {
      * Populate an ownship report from the receiver position. This is the single builder for every GDL90 emitter (feed
      * sinks and the WiFi AP broadcast) so they cannot disagree about what counts as ownship.
      *
-     * When no usable position exists, data is left as the GDL90 "no position" report (callsign and address type only,
-     * lat/lon/NIC zero) rather than sending 0,0 as a real fix.
-     * @param[out] data Target report data to fill. Callsign and address type are always written.
+     * When no usable position exists, data is left as the GDL90 "no position" report (identity only, lat/lon/NIC zero)
+     * rather than sending 0,0 as a real fix.
+     * @param[out] data Target report data to fill. Identity (address, callsign, emitter category) is always written.
      * @param[in] rx_position Receiver position to report.
      * @param[in] rx_position_available Whether rx_position currently holds a fresh position.
+     * @param[in] ownship Identity and baro data set over the console. A configured address, and fresh baro data, take
+     * precedence over what the receiver position provides.
      * @retval True if data carries a valid ownship position (also the value for the heartbeat's GPS Position Valid
      * flag), false otherwise.
      */
     static bool BuildOwnshipReportData(GDL90TargetReportData& data, const SettingsManager::RxPosition& rx_position,
-                                       bool rx_position_available);
+                                       bool rx_position_available, const Ownship::Snapshot& ownship = {});
+
+    static ForeFlightAHRSData BuildForeFlightAHRSData(const Ownship::Snapshot& ownship);
 
     /**
      * Write a GDL90 message for ownship or traffic data. This function calls the version that takes a

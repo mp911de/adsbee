@@ -119,7 +119,7 @@ Here are a few apps that can be used with ADSBee 1090. If you have one that you 
 
 !!! note
 
-    ADSBee 1090 doesn’t yet support ownship position reports, but it’s on the TODO list (need to integrate a GPS module, the hardware interface is already on the PCB). For now, ADSBee 1090 works best with devices that have their own GPS which can provide ownship position data.
+    ADSBee 1090 reports ownship only with a position source: a GNSS module (`AT+RX_POSITION=GNSS`) or your own transponder (`AT+RX_POSITION=ICAO,<icao>`). Without one, use an EFB device with its own GPS. See [Ownship](#ownship) for identity, pressure altitude and attitude.
 
 ![Avare GDL90 input settings](../assets/getting-started/2024-11-screenshot-20241115-182748-461x1024.png){ width="300" }
 
@@ -128,6 +128,32 @@ Here are a few apps that can be used with ADSBee 1090. If you have one that you 
 ![Avare showing ownship and traffic](../assets/getting-started/2024-11-screenshot-20241115-182755-461x1024.jpg){ width="300" }
 
 *Ownship position (red), and traffic (blue).*
+
+### Ownship { #ownship }
+
+The GDL90 ownship report takes its position from `AT+RX_POSITION`. A connected device, such as a flight computer, can add identity, pressure altitude and attitude over the CLI. These settings live in RAM only and are lost on reboot, so the device sends them again after each start.
+
+- `AT+OWNSHIP=RX_POSITION,<address>,<callsign>,<category>` sets the identity. `<address>` is your hex ICAO address, so the EFB can tell your own aircraft apart from traffic. Leave it empty to let the EFB work that out itself. `<callsign>` takes up to 8 letters and digits (default `ADSBEE`). `<category>` is a number from the table below (default 0).
+- `AT+OWNSHIP_BARO=<pressure_alt_ft>[,<vertical_rate_fpm>]` sets pressure altitude, referenced to 1013.25 hPa and not QNH corrected.
+- `AT+OWNSHIP_AHRS=[roll],[pitch],[heading],[T|M],[ias_kts],[tas_kts]` sets attitude for EFBs that read the ForeFlight AHRS message. Leave a field empty if you don't have it, but send at least one value. Heading is true (`T`) or magnetic (`M`), never track.
+- Altitude and attitude expire 5 seconds after they were set, so send them at least once a second. `AT+OWNSHIP?` shows the identity, `AT+OWNSHIP_BARO?` and `AT+OWNSHIP_AHRS?` show the current values and their age.
+
+!!! warning
+
+    Ownship attitude is for situational awareness only. It is no replacement for certified attitude instruments.
+
+| Category | Identifier | Category | Identifier |
+|---|---|---|---|
+| 0 | Unknown | 11 | Parachutist |
+| 1 | Light (C172, DA40) | 12 | Ultralight (Ikarus C42, paraglider) |
+| 2 | Small (ATR 72, CRJ200) | 14 | UAV |
+| 3 | Large (A320, B737) | 15 | Space (SpaceShipTwo) |
+| 4 | High vortex (B757) | 17 | Emergency vehicle |
+| 5 | Heavy | 18 | Service vehicle |
+| 6 | Maneuverable | 19 | Point obstacle |
+| 7 | Rotorcraft | 20 | Cluster obstacle |
+| 9 | Glider | 21 | Line obstacle |
+| 10 | Balloon | 8, 13, 16, 22–39 | Reserved |
 
 ## 🌐 Feed an Aggregator { #feed-aggregator }
 

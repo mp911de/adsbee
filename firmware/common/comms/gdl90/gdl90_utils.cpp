@@ -1,6 +1,7 @@
 #include "gdl90_utils.hh"
 
 #include "comms.hh"
+#include "utc_time.hh"
 
 // Initialize static variables.
 const uint16_t GDL90Reporter::kGDL90CRC16Table[] = {
@@ -67,9 +68,15 @@ uint16_t GDL90Reporter::WriteBufferWithGDL90Escapes(uint8_t* to_buf, uint16_t to
     return bytes_written;
 }
 
+uint32_t GDL90Reporter::HeartbeatTimestamp(bool utc_valid, uint64_t utc_unix_ms, uint32_t uptime_ms) {
+    return utc_valid ? UTCSecondsOfDay(utc_unix_ms) : uptime_ms / 1000 % kSecondsPerDay;
+}
+
 uint16_t GDL90Reporter::WriteGDL90HeartbeatMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
                                                    uint32_t timestamp_sec_since_0000z, uint16_t adsb_message_counts,
                                                    uint16_t uat_uplink_message_counts) {
+    // The 17-bit field holds one day of seconds.
+    timestamp_sec_since_0000z %= kSecondsPerDay;
     const uint16_t kMessageBufLenBytes = 7;
     uint8_t message_buf[kMessageBufLenBytes];
     // 1: Message ID
@@ -260,7 +267,7 @@ GDL90Reporter::ForeFlightIDData GDL90Reporter::BuildForeFlightIDData(const uint8
     for (uint16_t i = 0; i < 8; i++) {
         data.serial_number = (data.serial_number << 8) | receiver_id[i];
     }
-    snprintf(data.device_long_name, sizeof(data.device_long_name), "%s %s", GDL90_DEVICE_NAME, firmware_version);
+    snprintf(data.device_long_name, sizeof(data.device_long_name), "%s", firmware_version);
     data.geometric_altitude_is_msl = true;
     return data;
 }
@@ -312,12 +319,14 @@ bool GDL90Reporter::IsValidOwnshipSource(SettingsManager::RxPosition::PositionSo
            source == SettingsManager::RxPosition::kPositionSourceAircraftMatchingICAO;
 }
 
-bool GDL90Reporter::BuildOwnshipReportData(GDL90TargetReportData& data,
-                                           const SettingsManager::RxPosition& rx_position,
-                                           bool rx_position_available) {
+bool GDL90Reporter::BuildOwnshipReportData(GDL90TargetReportData& data, const SettingsManager::RxPosition& rx_position,
+                                           bool rx_position_available, const Ownship::Snapshot& ownship) {
     data = {};
-    memcpy(data.callsign, "ADSBEE  ", sizeof(data.callsign) - 1);
-    data.address_type = GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress;
+    memcpy(data.callsign, ownship.callsign, strnlen(ownship.callsign, sizeof(data.callsign) - 1));
+    data.emitter_category = ownship.emitter_category;
+    data.address_type = ownship.address != 0 ? GDL90TargetReportData::kAddressTypeADSBWithICAOAddress
+                                             : GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress;
+    data.participant_address = ownship.address;
 
     bool have_position = rx_position_available && IsValidOwnshipSource(rx_position.source);
     if (!have_position) {
@@ -327,19 +336,40 @@ bool GDL90Reporter::BuildOwnshipReportData(GDL90TargetReportData& data,
     bool from_tracked_aircraft = rx_position.source == SettingsManager::RxPosition::kPositionSourceAircraftMatchingICAO;
     data.latitude_deg = rx_position.latitude_deg;
     data.longitude_deg = rx_position.longitude_deg;
-    // The ownship report altitude is pressure altitude. A GNSS fix carries no baro data, so report it invalid
-    // (INT32_MIN encodes as 0xFFF) rather than substituting geometric altitude or a stale value.
-    data.altitude_ft = from_tracked_aircraft ? rx_position.baro_altitude_ft : INT32_MIN;
+    // The ownship report altitude is pressure altitude. A GNSS fix carries no baro data, so without a barometer report
+    // it invalid (INT32_MIN encodes as 0xFFF) rather than substituting geometric altitude or a stale value.
+    if (ownship.baro_valid) {
+        data.altitude_ft = ownship.baro_altitude_ft;
+    } else {
+        data.altitude_ft = from_tracked_aircraft ? rx_position.baro_altitude_ft : INT32_MIN;
+    }
+    if (ownship.vertical_rate_valid) {
+        data.vertical_rate_fpm = ownship.vertical_rate_fpm;
+    }
     data.speed_kts = rx_position.speed_kts;
     data.direction_deg = rx_position.heading_deg;
-    // Only carry a real ICAO address when bootstrapping off a tracked aircraft; a GNSS ownship is self-assigned.
-    data.participant_address = from_tracked_aircraft ? rx_position.icao_address : 0x0;
+    // Only carry a real ICAO address when configured or bootstrapping off a tracked aircraft; a GNSS ownship is
+    // self-assigned.
+    if (ownship.address == 0 && from_tracked_aircraft) {
+        data.participant_address = rx_position.icao_address;
+    }
     // Non-zero NIC so EFBs treat the position as valid. Conservative fixed accuracy category (<92.6 m).
     data.navigation_integrity_category = 8;
     data.navigation_accuracy_category_position = 8;
     data.SetMiscIndicator(GDL90TargetReportData::kMiscIndicatorTTIsTrueTrackAngle, false,
                           rx_position.speed_kts > kOwnshipAirborneSpeedKts);
     return true;
+}
+
+GDL90Reporter::ForeFlightAHRSData GDL90Reporter::BuildForeFlightAHRSData(const Ownship::Snapshot& ownship) {
+    ForeFlightAHRSData data;
+    data.roll_deg = ownship.roll_deg;
+    data.pitch_deg = ownship.pitch_deg;
+    data.heading_deg = ownship.heading_deg;
+    data.heading_is_magnetic = ownship.heading_is_magnetic;
+    data.indicated_airspeed_kts = ownship.indicated_airspeed_kts;
+    data.true_airspeed_kts = ownship.true_airspeed_kts;
+    return data;
 }
 
 uint16_t GDL90Reporter::WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,

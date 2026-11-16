@@ -105,6 +105,9 @@ class CommsManager {
     CPP_AT_CALLBACK(ATGNSSFixCallback);
     CPP_AT_CALLBACK(ATGNSSStatusCallback);
     CPP_AT_CALLBACK(ATGNSSDiagCallback);
+    CPP_AT_CALLBACK(ATOwnshipCallback);
+    CPP_AT_CALLBACK(ATOwnshipBaroCallback);
+    CPP_AT_CALLBACK(ATOwnshipAHRSCallback);
 #ifdef AIRGREP
     CPP_AT_CALLBACK(ATTimePingCallback);
 #endif

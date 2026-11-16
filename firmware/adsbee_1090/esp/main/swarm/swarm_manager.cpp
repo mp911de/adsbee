@@ -94,7 +94,7 @@ void SwarmManager::Update() {
     }
 
     // Aircraft-derived receiver positions move with the aircraft: no range map from them.
-    const ObjectDictionary::RP2040DeviceStatus& rp2040 = object_dictionary.composite_device_status.rp2040;
+    const ObjectDictionary::RP2040DeviceStatus rp2040 = object_dictionary.CurrentRP2040Status();
     SettingsManager::RxPosition::PositionSource source = rp2040.rx_position.source;
     bool range_valid = SwarmReporter::UsablePosition(rp2040.rx_position_available, source,
                                                      rp2040.rx_position.latitude_deg, rp2040.rx_position.longitude_deg);

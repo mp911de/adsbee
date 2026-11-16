@@ -11,6 +11,7 @@
 #include <cstring>
 
 #include "composite_array.hh"
+#include "../comms/ownship.hh"
 #include "../flarm/flarm_transport.hh"
 #include "data_structures.hh"
 #include "hal.hh"
@@ -34,6 +35,15 @@ class ObjectDictionary {
     static const uint8_t kFirmwareVersionPatch;
     static const uint8_t kFirmwareVersionReleaseCandidate;
     static const uint32_t kFirmwareVersion;
+    static const char* const kGitCommit;  // Short commit of the build, "" when unknown.
+
+    /**
+     * Writes the firmware version, e.g. "0.9.1", "0.9.1-rc11" or "0.9.1-rc11-40e2a88-dirty".
+     * @param[out] buf Output buffer, truncated to fit.
+     * @param[in] buf_len Size of buf, in bytes.
+     * @param[in] commit Commit to append, omitted when empty.
+     */
+    static void FormatFirmwareVersion(char* buf, size_t buf_len, const char* commit = kGitCommit);
 
     static constexpr uint16_t kMACAddrLenBytes = 6;
 
@@ -176,6 +186,29 @@ class ObjectDictionary {
         // level sits at noise_floor_mv + TL offset.
         uint16_t noise_floor_mv = 0;
         int16_t noise_floor_dbm = 0;
+        Ownship::Snapshot ownship;  // Expiry applied at timestamp_ms.
+
+        // The RP2040 sends its status every SPICoprocessor update interval (100 ms). Older than this, it went silent.
+        static constexpr uint32_t kMaxAgeMs = 1000;
+
+        /**
+         * This status as seen age_ms after it was captured, so a receiver never reports old values as current.
+         * @param[in] age_ms Time since the status was captured.
+         * @retval The status with UTC brought forward by age_ms. Past kMaxAgeMs, position, GNSS fix, UTC and ownship
+         * live data are marked invalid instead.
+         */
+        RP2040DeviceStatus AgedBy(uint32_t age_ms) const {
+            RP2040DeviceStatus status = *this;
+            if (age_ms > kMaxAgeMs) {
+                status.rx_position_available = false;
+                status.gnss_fix_valid = false;
+                status.gnss_utc_time_valid = false;
+                status.ownship = ownship.WithoutLiveData();
+            } else {
+                status.gnss_utc_unix_ms += age_ms;
+            }
+            return status;
+        }
         // Receivers running now. AT commands change these before the ESP32's settings copy is synced.
         bool r1090_rx_enabled = false;
         bool subg_rx_enabled = false;  // Sub-GHz radio on and receiving.
@@ -466,6 +499,12 @@ class ObjectDictionary {
     });
     SemaphoreHandle_t network_console_rx_queue_mutex = xSemaphoreCreateMutex();
     CompositeDeviceStatus composite_device_status = {};
+    // ESP32 uptime at which composite_device_status last arrived.
+    volatile uint32_t composite_device_status_timestamp_ms = 0;
+    // The RP2040 status as of now. Read live values through this rather than composite_device_status.rp2040.
+    RP2040DeviceStatus CurrentRP2040Status() const {
+        return composite_device_status.rp2040.AgedBy(get_time_since_boot_ms() - composite_device_status_timestamp_ms);
+    }
     ESP32DeviceStatus device_status = {};
     // Filled by the RP2040 when requested (kAddrDeviceIdentity).
     SettingsManager::DeviceIdentity device_identity = {};

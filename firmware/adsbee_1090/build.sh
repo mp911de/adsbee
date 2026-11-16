@@ -57,26 +57,36 @@ check_esp_idf_version() {
     fi
 }
 
+# The containers mount the sources without .git, so the commit is read on the host. See common/cmake/git_commit.cmake.
+host_git_commit() {
+    local commit
+    commit=$(git rev-parse --short HEAD 2>/dev/null) || return 0
+    [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ] && commit="$commit-dirty"
+    echo "$commit"
+}
+
 build_esp() {
     check_esp_idf_version
     # The container mounts esp/ without .git, so ESP-IDF cannot run git describe for the app version
     # (esp_app_desc_t::version). Use the same describe arguments ESP-IDF uses, from the host.
     local project_ver
     project_ver=$(git describe --always --tags --dirty 2>/dev/null || echo 1)
+    local git_commit
+    git_commit=$(host_git_commit)
     if [ "$debug" = true ]; then
         echo "=== Building ESP32-S3 firmware (Debug) ==="
         # sdkconfig_debug is auto-generated on first run by layering sdkconfig.debug on top of sdkconfig.
         # Delete esp/sdkconfig_debug to force regeneration (e.g. after base sdkconfig changes).
         docker compose run --rm esp-idf bash -c "
             cd /firmware/adsbee_1090/esp &&
-            idf.py -B build/Debug -D PROJECT_VER=\"$project_ver\" -D CMAKE_BUILD_TYPE=Debug -D SDKCONFIG=\"\$(pwd)/sdkconfig_debug\" -D \"SDKCONFIG_DEFAULTS=\$(pwd)/sdkconfig;\$(pwd)/sdkconfig.debug\" build
+            idf.py -B build/Debug -D PROJECT_VER=\"$project_ver\" -D ADSBEE_GIT_COMMIT=\"$git_commit\" -D CMAKE_BUILD_TYPE=Debug -D SDKCONFIG=\"\$(pwd)/sdkconfig_debug\" -D \"SDKCONFIG_DEFAULTS=\$(pwd)/sdkconfig;\$(pwd)/sdkconfig.debug\" build
         "
         echo "=== ESP32-S3 build complete (Debug): esp/build/Debug/adsbee_esp.bin ==="
     else
         echo "=== Building ESP32-S3 firmware ==="
         docker compose run --rm esp-idf bash -c "
             cd /firmware/adsbee_1090/esp &&
-            idf.py -B build/Release -D PROJECT_VER=\"$project_ver\" build
+            idf.py -B build/Release -D PROJECT_VER=\"$project_ver\" -D ADSBEE_GIT_COMMIT=\"$git_commit\" build
         "
         echo "=== ESP32-S3 build complete: esp/build/Release/adsbee_esp.bin ==="
     fi
@@ -112,10 +122,12 @@ build_pico() {
         echo "ERROR: ti/sub_ghz_radio/$ti_build_dir/sub_ghz_radio.bin not found. Run TI build first."
         exit 1
     fi
+    local git_commit
+    git_commit=$(host_git_commit)
     docker compose run --rm -e ADSBEE_PROFILE pico-docker bash -c "
         cd /firmware/adsbee_1090/pico &&
         mkdir -p build/$build_variant && cd build/$build_variant &&
-        cmake -DCMAKE_BUILD_TYPE=$build_type \
+        cmake -DCMAKE_BUILD_TYPE=$build_type -DADSBEE_GIT_COMMIT=\"$git_commit\" \
               -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ../.. &&
         cmake --build . --config $build_type --target all -j $jobs

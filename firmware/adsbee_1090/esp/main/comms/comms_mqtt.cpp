@@ -214,12 +214,7 @@ void CommsManager::PublishMQTTMetrics() {
     }
     mqtt_metrics_last_publish_timestamp_ms_ = timestamp_ms;
     char version[20];
-    int version_len = snprintf(version, sizeof(version), "%d.%d.%d", ObjectDictionary::kFirmwareVersionMajor,
-                               ObjectDictionary::kFirmwareVersionMinor, ObjectDictionary::kFirmwareVersionPatch);
-    if (ObjectDictionary::kFirmwareVersionReleaseCandidate != 0) {
-        snprintf(version + version_len, sizeof(version) - version_len, "-rc%d",
-                 ObjectDictionary::kFirmwareVersionReleaseCandidate);
-    }
+    ObjectDictionary::FormatFirmwareVersion(version, sizeof(version), "");
     // Static: the feed task's stack is small.
     static char payload[512];
     int len = snprintf(payload, sizeof(payload),

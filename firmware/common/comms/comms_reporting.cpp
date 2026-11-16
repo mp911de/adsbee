@@ -821,29 +821,36 @@ bool CommsManager::ReportGDL90(ReportSink* sinks, uint16_t num_sinks) {
         // Receiver position is owned by the RP2040. On the ESP32 it arrives in the composite
         // device status alongside the position-available flag.
 #ifdef ON_ESP32
-        const SettingsManager::RxPosition& rx_position = object_dictionary.composite_device_status.rp2040.rx_position;
-        bool rx_position_available = object_dictionary.composite_device_status.rp2040.rx_position_available;
-        bool gnss_utc_time_valid = object_dictionary.composite_device_status.rp2040.gnss_utc_time_valid;
+        const ObjectDictionary::RP2040DeviceStatus rp2040_status = object_dictionary.CurrentRP2040Status();
+        const SettingsManager::RxPosition& rx_position = rp2040_status.rx_position;
+        bool rx_position_available = rp2040_status.rx_position_available;
+        bool gnss_utc_time_valid = rp2040_status.gnss_utc_time_valid;
+        uint64_t utc_unix_ms = rp2040_status.gnss_utc_unix_ms;
+        const Ownship::Snapshot& ownship_snapshot = rp2040_status.ownship;
 #else
         const SettingsManager::RxPosition& rx_position = adsbee.rx_position;
         bool rx_position_available = adsbee.rx_position_available;
-        uint64_t utc_unix_ms;
+        uint64_t utc_unix_ms = 0;
         bool gnss_utc_time_valid = gnss != nullptr && gnss->GetUTCUnixMs(utc_unix_ms);
+        Ownship::Snapshot ownship_snapshot = ownship.Get(get_time_since_boot_ms());
 #endif
         // Build the ownship report up front: its validity also drives the heartbeat's GPS Position Valid flag.
         // Selecting RX_POSITION=GNSS routes the latest fresh GNSS fix populated by ADSBee::UpdateRxPosition().
         GDL90Reporter::GDL90TargetReportData ownship_data;
-        bool have_position = GDL90Reporter::BuildOwnshipReportData(ownship_data, rx_position, rx_position_available);
+        bool have_position =
+            GDL90Reporter::BuildOwnshipReportData(ownship_data, rx_position, rx_position_available, ownship_snapshot);
 
         gdl90.gnss_position_valid = have_position;
         gdl90.utc_timing_is_valid = gnss_utc_time_valid;
         gdl90.maintenance_required = false;
 
-        msg_len = gdl90.WriteGDL90HeartbeatMessage(buf, sizeof(buf), get_time_since_boot_ms() / 1000,
-                                                   aircraft_dictionary.metrics.valid_squitter_frames +
-                                                       aircraft_dictionary.metrics.valid_extended_squitter_frames +
-                                                       aircraft_dictionary.metrics.valid_uat_adsb_frames,
-                                                   aircraft_dictionary.metrics.valid_uat_uplink_frames);
+        msg_len = gdl90.WriteGDL90HeartbeatMessage(
+            buf, sizeof(buf),
+            GDL90Reporter::HeartbeatTimestamp(gnss_utc_time_valid, utc_unix_ms, get_time_since_boot_ms()),
+            aircraft_dictionary.metrics.valid_squitter_frames +
+                aircraft_dictionary.metrics.valid_extended_squitter_frames +
+                aircraft_dictionary.metrics.valid_uat_adsb_frames,
+            aircraft_dictionary.metrics.valid_uat_uplink_frames);
         // The GDL90 writers return a byte count with no error sentinel; 0 means nothing was written.
         if (msg_len == 0) {
             gdl90_tally.num_build_failures++;
@@ -852,12 +859,37 @@ bool CommsManager::ReportGDL90(ReportSink* sinks, uint16_t num_sinks) {
             ret &= SendBufToSinks(sinks, num_sinks, (char*)buf, msg_len, gdl90_tally);
         }
 
+#ifndef ON_TI
+        char version[sizeof(GDL90Reporter::ForeFlightIDData::device_long_name)];
+        ObjectDictionary::FormatFirmwareVersion(version, sizeof(version));
+        msg_len = gdl90.WriteForeFlightIDMessage(
+            buf, sizeof(buf),
+            GDL90Reporter::BuildForeFlightIDData(settings_manager.settings.feed_receiver_ids[0], version));
+        if (msg_len == 0) {
+            gdl90_tally.num_build_failures++;
+            ret = false;
+        } else {
+            ret &= SendBufToSinks(sinks, num_sinks, (char*)buf, msg_len, gdl90_tally);
+        }
+#endif
+
         msg_len = gdl90.WriteGDL90TargetReportMessage(buf, sizeof(buf), ownship_data, true);
         if (msg_len == 0) {
             gdl90_tally.num_build_failures++;
             ret = false;
         } else {
             ret &= SendBufToSinks(sinks, num_sinks, (char*)buf, msg_len, gdl90_tally);
+        }
+
+        if (ownship_snapshot.ahrs_valid) {
+            msg_len = gdl90.WriteForeFlightAHRSMessage(buf, sizeof(buf),
+                                                       GDL90Reporter::BuildForeFlightAHRSData(ownship_snapshot));
+            if (msg_len == 0) {
+                gdl90_tally.num_build_failures++;
+                ret = false;
+            } else {
+                ret &= SendBufToSinks(sinks, num_sinks, (char*)buf, msg_len, gdl90_tally);
+            }
         }
     }
 
@@ -974,8 +1006,7 @@ static ASTERIXReporter::Clock GetASTERIXClock() {
     if (network_time.GetUTC(network_utc_ms_of_day, network_local_ms)) {
         clock.SetUTC(network_utc_ms_of_day, network_local_ms, ASTERIXReporter::Clock::kSourceNetwork);
     }
-    // The RP2040 sends its status on every main loop pass, with UTC brought forward to the time it was sent.
-    const ObjectDictionary::RP2040DeviceStatus& rp2040 = object_dictionary.composite_device_status.rp2040;
+    const ObjectDictionary::RP2040DeviceStatus rp2040 = object_dictionary.CurrentRP2040Status();
     if (rp2040.gnss_utc_time_valid) {
         clock.SetUTC(ASTERIXReporter::UTCMsOfDay(rp2040.gnss_utc_unix_ms), get_time_since_boot_ms(),
                      ASTERIXReporter::Clock::kSourceGNSS);

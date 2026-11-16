@@ -16,6 +16,7 @@
 #include "hardware_unit_tests.hh"  // For testing only!
 #include "mode_s_packet.hh"
 #include "mode_s_packet_decoder.hh"
+#include "ownship.hh"
 #include "pico/binary_info.h"
 #include "pico/stdlib.h"
 #include "ram_monitor.hh"
@@ -54,6 +55,7 @@ GNSSReceiver* gnss = MakeGNSSReceiver(bsp.gnss_module_type);
 
 SettingsManager settings_manager;
 ObjectDictionary object_dictionary;
+Ownship ownship;
 
 // Define low-level coprocessor devices with overrides for things like GPIO and init functions.
 ESP32 esp32_ll = ESP32({});
