@@ -36,11 +36,6 @@ TEST(NMEAParser, ParsesGPGGA) {
     EXPECT_NEAR(fix.longitude_deg, 11.5167f, 0.001f);
     EXPECT_NEAR(fix.altitude_ft, static_cast<int32_t>(545.4f * 3.28084f), 2);
     EXPECT_EQ(fix.last_update_timestamp_ms, 1000u);
-    EXPECT_TRUE(fix.utc_time_valid);
-    EXPECT_EQ(fix.utc_hour, 12);
-    EXPECT_EQ(fix.utc_minute, 35);
-    EXPECT_EQ(fix.utc_second, 19);
-    EXPECT_EQ(fix.utc_millisecond, 0);
 }
 
 TEST(NMEAParser, ParsesGPRMC) {
@@ -87,11 +82,6 @@ TEST(NMEAParser, ParsesAT6558StartupStream) {
     EXPECT_EQ(parser.fix().fix_quality, 0);
     EXPECT_EQ(parser.fix().num_satellites, 0);
     EXPECT_FLOAT_EQ(parser.fix().hdop, 25.5f);
-    EXPECT_TRUE(parser.fix().utc_time_valid);
-    EXPECT_EQ(parser.fix().utc_hour, 0);
-    EXPECT_EQ(parser.fix().utc_minute, 55);
-    EXPECT_EQ(parser.fix().utc_second, 38);
-    EXPECT_EQ(parser.fix().utc_millisecond, 537);
 
     EXPECT_EQ(FeedSentence(parser, "$GPGSV,3,1,09,03,40,211,,04,67,330,,07,19,272,,08,08,169,,0*68\r\n"),
               NMEAParser::kSentenceUnknown);
@@ -100,7 +90,9 @@ TEST(NMEAParser, ParsesAT6558StartupStream) {
     EXPECT_EQ(FeedSentence(parser, "$GNRMC,005538.537,V,,,,,,,020826,,,M,V*2E\r\n"),
               NMEAParser::kSentenceRMC);
     EXPECT_FALSE(parser.fix().valid);
-    EXPECT_EQ(parser.fix().utc_millisecond, 537);
+    uint64_t utc = 0;
+    ASSERT_TRUE(parser.GetUTCUnixMs(1234, utc));  // Void RMC still carries the receiver's time.
+    EXPECT_EQ(utc, 1785632138537ULL);
 }
 
 // A NMEA 4.11-style sentence with extra appended trailing fields must still parse the leading

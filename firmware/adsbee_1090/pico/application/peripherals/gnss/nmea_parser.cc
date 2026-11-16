@@ -40,7 +40,12 @@ bool ParseLatLon(const char* coord, const char* hemi, float& out_deg) {
 
 constexpr float kMetersToFeet = 3.28084f;
 
-bool ParseUTCTime(const char* field, NMEAParser::GNSSFix& fix) {
+struct UTCTimeOfDay {
+    uint8_t hour, minute, second;
+    uint16_t millisecond;
+};
+
+bool ParseUTCTime(const char* field, UTCTimeOfDay& time) {
     if (field == nullptr || strlen(field) < 6) return false;
     for (uint8_t i = 0; i < 6; i++) {
         if (field[i] < '0' || field[i] > '9') return false;
@@ -62,11 +67,7 @@ bool ParseUTCTime(const char* field, NMEAParser::GNSSFix& fix) {
         }
     }
 
-    fix.utc_hour = hour;
-    fix.utc_minute = minute;
-    fix.utc_second = second;
-    fix.utc_millisecond = millisecond;
-    fix.utc_time_valid = true;
+    time = {hour, minute, second, millisecond};
     return true;
 }
 
@@ -198,7 +199,6 @@ NMEAParser::SentenceType NMEAParser::ParseGGA(const char* const* fields, uint8_t
     fix_.fix_quality = fix_quality;
     fix_.num_satellites = static_cast<uint8_t>(atoi(fields[7]));
     fix_.hdop = fields[8][0] != '\0' ? strtof(fields[8], nullptr) : -1.0f;
-    ParseUTCTime(fields[1], fix_);
 
     if (fields[9][0] != '\0') {
         float altitude_m = strtof(fields[9], nullptr);
@@ -228,13 +228,14 @@ NMEAParser::SentenceType NMEAParser::ParseRMC(const char* const* fields, uint8_t
 
     bool status_valid = strcmp(fields[2], "A") == 0;
     bool status_known = status_valid || strcmp(fields[2], "V") == 0;
-    bool time_valid = ParseUTCTime(fields[1], fix_);
+    UTCTimeOfDay time;
+    bool time_valid = ParseUTCTime(fields[1], time);
     uint32_t days_since_epoch;
     // POSIX time cannot represent a leap second. Wait for the next ordinary RMC sample.
-    utc_valid_ = status_known && time_valid && fix_.utc_second < 60 && ParseUTCDate(fields[9], days_since_epoch);
+    utc_valid_ = status_known && time_valid && time.second < 60 && ParseUTCDate(fields[9], days_since_epoch);
     if (utc_valid_) {
-        utc_unix_ms_ = (static_cast<uint64_t>(days_since_epoch) * 86400 + fix_.utc_hour * 3600 +
-                        fix_.utc_minute * 60 + fix_.utc_second) * 1000 + fix_.utc_millisecond;
+        utc_unix_ms_ = (static_cast<uint64_t>(days_since_epoch) * 86400 + time.hour * 3600 + time.minute * 60 +
+                        time.second) * 1000 + time.millisecond;
         utc_update_timestamp_ms_ = timestamp_ms_;
     }
 

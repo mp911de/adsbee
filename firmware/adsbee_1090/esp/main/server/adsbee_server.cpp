@@ -1,6 +1,5 @@
 #include "adsbee_server.hh"
 
-#include <ctime>
 #include <new>
 
 #include "esp_heap_caps.h"
@@ -22,6 +21,7 @@
 #include "spi_coprocessor.hh"
 #include "task_priorities.hh"
 #include "unit_conversions.hh"
+#include "utc_time.hh"
 
 // #define VERBOSE_DEBUG
 
@@ -1010,10 +1010,7 @@ void ADSBeeServer::SendNetworkMetricsMessage() {
     const ObjectDictionary::RP2040DeviceStatus& rp2040_status = object_dictionary.composite_device_status.rp2040;
     char gnss_utc_time[9] = "--:--:--";
     if (rp2040_status.gnss_utc_time_valid) {
-        time_t utc_s = static_cast<time_t>(rp2040_status.gnss_utc_unix_ms / 1000);
-        struct tm utc;
-        gmtime_r(&utc_s, &utc);
-        strftime(gnss_utc_time, sizeof(gnss_utc_time), "%H:%M:%S", &utc);
+        FormatUTC(rp2040_status.gnss_utc_unix_ms, "%H:%M:%S", gnss_utc_time, sizeof(gnss_utc_time));
     }
     snprintf(metrics_message + strnlen(metrics_message, kNetworkMetricsMessageMaxLen),
              kNetworkMetricsMessageMaxLen - strnlen(metrics_message, kNetworkMetricsMessageMaxLen),

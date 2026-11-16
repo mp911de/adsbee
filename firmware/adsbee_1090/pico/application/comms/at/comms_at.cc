@@ -2,7 +2,6 @@
 
 #include <cctype>    // for isalnum
 #include <cstring>   // for strcat
-#include <ctime>
 #include <iostream>  // for AT command ingestion
 
 #include "adsbee.hh"
@@ -30,6 +29,7 @@
 #include "spi_coprocessor.hh"  // For init / de-init before and after flashing ESP32.
 #include "gnss_interface.hh"   // For parking/restoring the GNSS UART around ESP32 flashing.
 #include "airgrep_gnss_frame.hh"
+#include "utc_time.hh"
 
 #ifdef HARDWARE_UNIT_TESTS
 #include "hardware_unit_tests.hh"
@@ -456,10 +456,7 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
     uint64_t utc_unix_ms;
     char utc_epoch[24] = "";
     if (gnss->GetUTCUnixMs(utc_unix_ms)) {
-        time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
-        struct tm utc;
-        gmtime_r(&utc_s, &utc);
-        strftime(utc_time, sizeof(utc_time), "%H:%M:%S", &utc);
+        FormatUTC(utc_unix_ms, "%H:%M:%S", utc_time, sizeof(utc_time));
         snprintf(utc_epoch, sizeof(utc_epoch), "%llu", static_cast<unsigned long long>(utc_unix_ms));
     }
     CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s", gnss->HasValidFix(), fix.latitude_deg,

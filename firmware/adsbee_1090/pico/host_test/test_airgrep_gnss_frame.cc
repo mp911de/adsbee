@@ -4,6 +4,7 @@
 
 #include "buffer_utils.hh"
 #include "gtest/gtest.h"
+#include "utc_time.hh"
 
 namespace {
 
@@ -137,4 +138,11 @@ TEST(AirgrepGnssFrame, RejectsSmallBuffer) {
     AirgrepGnssFrame report{.fix = fix};
     char frame[AirgrepGnssFrame::kFrameMaxLen];
     EXPECT_EQ(report.Format(frame, sizeof(frame)), 0u);
+}
+
+TEST(UTCTime, FormatUTC) {
+    char buf[20];
+    EXPECT_EQ(FormatUTC(1709251199999ULL, "%Y-%m-%d %H:%M:%S", buf, sizeof(buf)), 19u);  // Leap day.
+    EXPECT_STREQ(buf, "2024-02-29 23:59:59");
+    EXPECT_EQ(FormatUTC(0, "%H:%M:%S", buf, 8), 0u);  // No room for the terminator.
 }

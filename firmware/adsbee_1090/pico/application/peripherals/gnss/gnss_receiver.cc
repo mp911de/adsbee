@@ -1,12 +1,12 @@
 #include "gnss_receiver.hh"
 
 #include <cstdio>
-#include <ctime>
 
 #include "comms.hh"             // For comms_manager (UART I/O + baud) and CONSOLE_* logging.
 #include "cpu_utils.hh"
 #include "hal.hh"               // For get_time_since_boot_ms().
 #include "ublox_max_m10_telemetry.hh"
+#include "utc_time.hh"
 
 void GNSSReceiver::ParkTx() {
     gpio_set_dir(config_.uart_tx_pin, GPIO_IN);
@@ -237,10 +237,7 @@ bool GNSSReceiver::Update() {
         char utc_time[9] = "--:--:--";
         uint64_t utc_unix_ms;
         if (GetUTCUnixMs(utc_unix_ms)) {
-            time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
-            struct tm utc;
-            gmtime_r(&utc_s, &utc);
-            strftime(utc_time, sizeof(utc_time), "%H:%M:%S", &utc);
+            FormatUTC(utc_unix_ms, "%H:%M:%S", utc_time, sizeof(utc_time));
         }
         CONSOLE_INFO("GNSSReceiver::Update", "GNSS_FIX=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu", current_fix_valid,
                      f.latitude_deg, f.longitude_deg, static_cast<long>(f.altitude_ft), f.heading_deg,
