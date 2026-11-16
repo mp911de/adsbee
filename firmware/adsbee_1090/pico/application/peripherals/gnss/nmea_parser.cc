@@ -227,10 +227,11 @@ NMEAParser::SentenceType NMEAParser::ParseRMC(const char* const* fields, uint8_t
     }
 
     bool status_valid = strcmp(fields[2], "A") == 0;
+    bool status_known = status_valid || strcmp(fields[2], "V") == 0;
     bool time_valid = ParseUTCTime(fields[1], fix_);
     uint32_t days_since_epoch;
     // POSIX time cannot represent a leap second. Wait for the next ordinary RMC sample.
-    utc_valid_ = status_valid && time_valid && fix_.utc_second < 60 && ParseUTCDate(fields[9], days_since_epoch);
+    utc_valid_ = status_known && time_valid && fix_.utc_second < 60 && ParseUTCDate(fields[9], days_since_epoch);
     if (utc_valid_) {
         utc_unix_ms_ = (static_cast<uint64_t>(days_since_epoch) * 86400 + fix_.utc_hour * 3600 +
                         fix_.utc_minute * 60 + fix_.utc_second) * 1000 + fix_.utc_millisecond;

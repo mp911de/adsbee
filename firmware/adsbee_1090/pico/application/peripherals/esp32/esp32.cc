@@ -145,12 +145,8 @@ bool ESP32::Update() {
     const NMEAParser::GNSSFix& gnss_fix = gnss->fix();
     uint32_t status_timestamp_ms = get_time_since_boot_ms();
     // UTC at the time of this status, so the ESP32 can read it as its current time.
-    static constexpr uint32_t kMsPerDay = 86400000;
-    uint32_t utc_ms_of_day =
-        ((((gnss_fix.utc_hour * 60u + gnss_fix.utc_minute) * 60u + gnss_fix.utc_second) * 1000u +
-          gnss_fix.utc_millisecond) +
-         (status_timestamp_ms - gnss_fix.last_update_timestamp_ms)) %
-        kMsPerDay;
+    uint64_t utc_unix_ms = 0;
+    bool utc_valid = gnss->GetUTCUnixMs(utc_unix_ms);
     ObjectDictionary::CompositeDeviceStatus composite_status = {
         .rp2040 =
             {
@@ -168,11 +164,8 @@ bool ESP32::Update() {
                 .gnss_heading_deg = gnss_fix.heading_deg,
                 .gnss_speed_kts = gnss_fix.speed_kts,
                 .gnss_num_satellites = gnss_fix.num_satellites,
-                .gnss_utc_time_valid = gnss_fix.utc_time_valid,
-                .gnss_utc_hour = static_cast<uint8_t>(utc_ms_of_day / 3600000),
-                .gnss_utc_minute = static_cast<uint8_t>(utc_ms_of_day / 60000 % 60),
-                .gnss_utc_second = static_cast<uint8_t>(utc_ms_of_day / 1000 % 60),
-                .gnss_utc_millisecond = static_cast<uint16_t>(utc_ms_of_day % 1000),
+                .gnss_utc_time_valid = utc_valid,
+                .gnss_utc_unix_ms = utc_unix_ms,
                 .noise_floor_mv = static_cast<uint16_t>(adsbee.GetNoiseFloorMilliVolts()),
                 .noise_floor_dbm = static_cast<int16_t>(adsbee.GetNoiseFloordBm()),
                 .r1090_rx_enabled = adsbee.Receiver1090IsEnabled(),

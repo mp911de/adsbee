@@ -46,10 +46,6 @@ TEST(AirgrepGnssFrame, FullFixKeepsFieldOrder) {
     fix.num_satellites = 11;
     fix.fix_quality = 2;
     fix.hdop = 0.9f;
-    fix.utc_time_valid = true;
-    fix.utc_hour = 7;
-    fix.utc_minute = 5;
-    fix.utc_second = 9;
     M10Diagnostics::RfStatus rf;
     rf.antenna_status = 2;
     rf.antenna_power = 1;
@@ -85,7 +81,7 @@ TEST(AirgrepGnssFrame, FullFixKeepsFieldOrder) {
                             .hardware = "00000A00",
                             .bbr_ok = true};
     EXPECT_EQ(Payload(Frame(report)),
-              "1,2,11,50.500000,-8.250000,1234,87,271.5,0.90,070509,1762588800123,2,1,1,"
+              "1,2,11,50.500000,-8.250000,1234,87,271.5,0.90,080000,1762588800123,2,1,1,"
               "47,24,5,4,3,2,10,12,11,13,1,ENABLED,EGNOS,2,-312,45,MAX-M10S,ROM SPG 5.10 (7b202e),00000A00,OK");
 }
 
@@ -132,12 +128,8 @@ TEST(AirgrepGnssFrame, StaleFixDropsPositionButKeepsTime) {
     fix.num_satellites = 3;
     fix.fix_quality = 1;
     fix.hdop = 12.0f;
-    fix.utc_time_valid = true;
-    fix.utc_hour = 23;
-    fix.utc_minute = 59;
-    fix.utc_second = 58;
-    AirgrepGnssFrame report{.fix = fix, .fix_valid = false};
-    EXPECT_EQ(Payload(Frame(report)), "0,1,3,,,,,,12.00,235958" + std::string(24, ','));
+    AirgrepGnssFrame report{.fix = fix, .fix_valid = false, .epoch_valid = true, .epoch_ms = 1798761598000ull};
+    EXPECT_EQ(Payload(Frame(report)), "0,1,3,,,,,,12.00,235958,1798761598000" + std::string(23, ','));
 }
 
 TEST(AirgrepGnssFrame, RejectsSmallBuffer) {

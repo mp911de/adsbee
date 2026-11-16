@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 
 #include "aircraft_dictionary.hh"
 
@@ -81,6 +82,13 @@ class ASTERIXReporter {
 
     static uint32_t UTCMsOfDay(uint8_t hour, uint8_t minute, uint8_t second, uint16_t millisecond) {
         return ((hour * 60u + minute) * 60u + second) * 1000u + millisecond;
+    }
+
+    static uint32_t UTCMsOfDay(uint64_t utc_unix_ms) {
+        time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
+        struct tm utc;
+        gmtime_r(&utc_s, &utc);
+        return UTCMsOfDay(utc.tm_hour, utc.tm_min, utc.tm_sec, utc_unix_ms % 1000);
     }
 
     /**

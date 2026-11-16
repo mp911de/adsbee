@@ -170,11 +170,8 @@ class ObjectDictionary {
         float gnss_heading_deg = 0.0f;
         int32_t gnss_speed_kts = 0;
         uint8_t gnss_num_satellites = 0;
-        bool gnss_utc_time_valid = false;  // The gnss_utc_* fields hold UTC at timestamp_ms.
-        uint8_t gnss_utc_hour = 0;
-        uint8_t gnss_utc_minute = 0;
-        uint8_t gnss_utc_second = 0;
-        uint16_t gnss_utc_millisecond = 0;
+        bool gnss_utc_time_valid = false;  // gnss_utc_unix_ms holds UTC at timestamp_ms.
+        uint64_t gnss_utc_unix_ms = 0;
         // 1090MHz receiver noise floor estimate (RSSI sampled between packets and low-pass filtered). The trigger
         // level sits at noise_floor_mv + TL offset.
         uint16_t noise_floor_mv = 0;

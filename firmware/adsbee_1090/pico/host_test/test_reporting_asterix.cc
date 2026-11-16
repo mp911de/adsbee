@@ -568,3 +568,10 @@ TEST(ASTERIXUtils, DataBlockHeader) {
     EXPECT_EQ(buf[2], 0x2C);
     EXPECT_EQ(ASTERIXReporter::BeginDataBlock(buf, 2, 23), 0);
 }
+
+TEST(ASTERIXUtils, UTCMsOfDayFromUnixMs) {
+    EXPECT_EQ(ASTERIXReporter::UTCMsOfDay(0ULL), 0u);
+    EXPECT_EQ(ASTERIXReporter::UTCMsOfDay(1709251199999ULL), 86399999u);  // 2024-02-29T23:59:59.999Z, leap day.
+    EXPECT_EQ(ASTERIXReporter::UTCMsOfDay(1798761604501ULL), 4501u);      // 2027-01-01T00:00:04.501Z.
+    EXPECT_EQ(ASTERIXReporter::UTCMsOfDay(764426119560ULL), ASTERIXReporter::UTCMsOfDay(12, 35, 19, 560));
+}

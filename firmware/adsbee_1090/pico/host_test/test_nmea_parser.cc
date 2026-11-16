@@ -203,7 +203,8 @@ TEST(NMEAParser, UTCRejectsMalformedOrUntrustedSamples) {
         "000000,A,,,,,,,011326", "000000,A,,,,,,,01102x", "000000,A,,,,,,,",
         "240000,A,,,,,,,111026", "126000,A,,,,,,,111026", "120061,A,,,,,,,111026",
         "120000x,A,,,,,,,111026", "120000.,A,,,,,,,111026", "120000.123x,A,,,,,,,111026",
-        ",A,,,,,,,111026", "120000,V,,,,,,,111026", "120000,AX,,,,,,,111026",
+        ",A,,,,,,,111026", ",V,,,,,,,111026", "120000,V,,,,,,,", "120000,X,,,,,,,111026",
+        "120000,,,,,,,,111026", "120000,AX,,,,,,,111026",
         "235960,A,,,,,,,311216", "120000,A"
     };
     for (const char* fields : bad_fields) {
@@ -214,6 +215,18 @@ TEST(NMEAParser, UTCRejectsMalformedOrUntrustedSamples) {
         FeedSentence(parser, (std::string("$GPRMC,") + fields + "\r\n").c_str());
         EXPECT_FALSE(parser.GetUTCUnixMs(0, utc)) << fields;
     }
+}
+
+// u-blox fills RMC time and date fields only when it considers them valid, also while status is V (no fix).
+TEST(NMEAParser, UTCFromVoidRMCWithoutPosition) {
+    NMEAParser parser;
+    FeedSentence(parser, "$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,,A\r\n");
+    FeedSentence(parser, "$GPRMC,123520,V,5000.000,N,01000.000,E,,,230394,,,N\r\n");
+    uint64_t utc = 0;
+    ASSERT_TRUE(parser.GetUTCUnixMs(0, utc));
+    EXPECT_EQ(utc, 764426120000ULL);
+    EXPECT_NEAR(parser.fix().latitude_deg, 48.1173f, 0.001f);
+    EXPECT_NEAR(parser.fix().longitude_deg, 11.5167f, 0.001f);
 }
 
 TEST(NMEAParser, UTCNeedsDatedRMCAndRejectsBadChecksum) {

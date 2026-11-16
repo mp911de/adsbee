@@ -1,6 +1,7 @@
 #include "gnss_receiver.hh"
 
 #include <cstdio>
+#include <ctime>
 
 #include "comms.hh"             // For comms_manager (UART I/O + baud) and CONSOLE_* logging.
 #include "cpu_utils.hh"
@@ -234,8 +235,12 @@ bool GNSSReceiver::Update() {
         (!notify_has_emitted_ || now_ms - notify_last_timestamp_ms_ >= kFixNotifyMinIntervalMs)) {
         const GNSSFix& f = parser_.fix();
         char utc_time[9] = "--:--:--";
-        if (f.utc_time_valid) {
-            snprintf(utc_time, sizeof(utc_time), "%02u:%02u:%02u", f.utc_hour, f.utc_minute, f.utc_second);
+        uint64_t utc_unix_ms;
+        if (GetUTCUnixMs(utc_unix_ms)) {
+            time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
+            struct tm utc;
+            gmtime_r(&utc_s, &utc);
+            strftime(utc_time, sizeof(utc_time), "%H:%M:%S", &utc);
         }
         CONSOLE_INFO("GNSSReceiver::Update", "GNSS_FIX=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu", current_fix_valid,
                      f.latitude_deg, f.longitude_deg, static_cast<long>(f.altitude_ft), f.heading_deg,

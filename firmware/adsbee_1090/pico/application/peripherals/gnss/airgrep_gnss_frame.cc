@@ -1,6 +1,7 @@
 #include "airgrep_gnss_frame.hh"
 
 #include <cstdio>
+#include <ctime>
 
 #include "buffer_utils.hh"
 
@@ -25,7 +26,12 @@ size_t AirgrepGnssFrame::Format(char* frame, size_t capacity) const {
     char hdop[8] = "";
     if (fix.hdop >= 0.0f) snprintf(hdop, sizeof(hdop), "%.2f", fix.hdop);
     char utc[8] = "";
-    if (fix.utc_time_valid) snprintf(utc, sizeof(utc), "%02u%02u%02u", fix.utc_hour, fix.utc_minute, fix.utc_second);
+    if (epoch_valid) {
+        time_t utc_s = static_cast<time_t>(epoch_ms / 1000);
+        struct tm utc_tm;
+        gmtime_r(&utc_s, &utc_tm);
+        strftime(utc, sizeof(utc), "%H%M%S", &utc_tm);
+    }
     char epoch[24] = "";
     if (epoch_valid) snprintf(epoch, sizeof(epoch), "%llu", static_cast<unsigned long long>(epoch_ms));
     char radio[16] = ",,";

@@ -827,7 +827,8 @@ bool CommsManager::ReportGDL90(ReportSink* sinks, uint16_t num_sinks) {
 #else
         const SettingsManager::RxPosition& rx_position = adsbee.rx_position;
         bool rx_position_available = adsbee.rx_position_available;
-        bool gnss_utc_time_valid = gnss != nullptr && gnss->fix().utc_time_valid;
+        uint64_t utc_unix_ms;
+        bool gnss_utc_time_valid = gnss != nullptr && gnss->GetUTCUnixMs(utc_unix_ms);
 #endif
         // Build the ownship report up front: its validity also drives the heartbeat's GPS Position Valid flag.
         // Selecting RX_POSITION=GNSS routes the latest fresh GNSS fix populated by ADSBee::UpdateRxPosition().
@@ -976,9 +977,8 @@ static ASTERIXReporter::Clock GetASTERIXClock() {
     // The RP2040 sends its status on every main loop pass, with UTC brought forward to the time it was sent.
     const ObjectDictionary::RP2040DeviceStatus& rp2040 = object_dictionary.composite_device_status.rp2040;
     if (rp2040.gnss_utc_time_valid) {
-        clock.SetUTC(ASTERIXReporter::UTCMsOfDay(rp2040.gnss_utc_hour, rp2040.gnss_utc_minute, rp2040.gnss_utc_second,
-                                                 rp2040.gnss_utc_millisecond),
-                     get_time_since_boot_ms(), ASTERIXReporter::Clock::kSourceGNSS);
+        clock.SetUTC(ASTERIXReporter::UTCMsOfDay(rp2040.gnss_utc_unix_ms), get_time_since_boot_ms(),
+                     ASTERIXReporter::Clock::kSourceGNSS);
     }
 #elif !defined(ON_TI)
     // The ESP32 status is read on every main loop pass while the ESP32 is up.
@@ -988,11 +988,10 @@ static ASTERIXReporter::Clock GetASTERIXClock() {
         clock.SetUTC(esp32_ll.network_utc_ms_of_day, esp32_ll.network_utc_timestamp_ms,
                      ASTERIXReporter::Clock::kSourceNetwork);
     }
-    if (gnss != nullptr && gnss->fix().utc_time_valid) {
-        const NMEAParser::GNSSFix& fix = gnss->fix();
-        clock.SetUTC(
-            ASTERIXReporter::UTCMsOfDay(fix.utc_hour, fix.utc_minute, fix.utc_second, fix.utc_millisecond),
-            fix.last_update_timestamp_ms, ASTERIXReporter::Clock::kSourceGNSS);
+    uint64_t utc_unix_ms;
+    if (gnss != nullptr && gnss->GetUTCUnixMs(utc_unix_ms)) {
+        clock.SetUTC(ASTERIXReporter::UTCMsOfDay(utc_unix_ms), get_time_since_boot_ms(),
+                     ASTERIXReporter::Clock::kSourceGNSS);
     }
 #endif
     return clock;

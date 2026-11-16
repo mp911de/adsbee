@@ -2,6 +2,7 @@
 
 #include <cctype>    // for isalnum
 #include <cstring>   // for strcat
+#include <ctime>
 #include <iostream>  // for AT command ingestion
 
 #include "adsbee.hh"
@@ -452,12 +453,13 @@ CPP_AT_CALLBACK(CommsManager::ATGNSSFixCallback) {
 
     const NMEAParser::GNSSFix& fix = gnss->fix();
     char utc_time[9] = "--:--:--";
-    if (fix.utc_time_valid) {
-        snprintf(utc_time, sizeof(utc_time), "%02u:%02u:%02u", fix.utc_hour, fix.utc_minute, fix.utc_second);
-    }
     uint64_t utc_unix_ms;
     char utc_epoch[24] = "";
     if (gnss->GetUTCUnixMs(utc_unix_ms)) {
+        time_t utc_s = static_cast<time_t>(utc_unix_ms / 1000);
+        struct tm utc;
+        gmtime_r(&utc_s, &utc);
+        strftime(utc_time, sizeof(utc_time), "%H:%M:%S", &utc);
         snprintf(utc_epoch, sizeof(utc_epoch), "%llu", static_cast<unsigned long long>(utc_unix_ms));
     }
     CPP_AT_CMD_PRINTF("=%d,%.6f,%.6f,%ld,%.1f,%ld,%u,%s,%lu,%s", gnss->HasValidFix(), fix.latitude_deg,
