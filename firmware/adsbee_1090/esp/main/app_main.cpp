@@ -6,6 +6,7 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
+#include "esp32_mlat_sync.hh"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -96,6 +97,7 @@ extern "C" void app_main(void) {
     CPUMonitor::Init();
     xTaskCreate(device_status_update_task, "DeviceStatusUpdate", kDeviceStatusUpdateTaskStackSizeBytes, NULL,
                 kDeviceStatusUpdateTaskPriority, NULL);
+    esp32_mlat_sync.Init();  // Before the RP2040 starts sending sync pulses.
     adsbee_server.Init();
     HeapDiagnostics::Mark("init_done");
 
@@ -109,6 +111,7 @@ extern "C" void app_main(void) {
     uint32_t last_heap_diagnostics_timestamp_ms = 0;
     while (1) {
         adsbee_server.Update();
+        esp32_mlat_sync.Update();  // Logs for the SPI task's sync pulse handler.
 
         // Yield to the idle task to avoid a watchdog trigger. Note: Delay must be >= 10ms since 100Hz tick is typical.
         vTaskDelay(1);  // Delay 1 tick (10ms).

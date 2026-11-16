@@ -3,10 +3,12 @@
 #include "hal.hh"  // for timestamping
 #ifdef ON_ESP32
 #include "adsbee_server.hh"
+#include "auto_update_manager.hh"
 #include "cpu_utils.hh"
 #include "device_info.hh"
 #include "esp32_firmware_check.hh"
 #include "esp_app_desc.h"
+#include "esp32_mlat_sync.hh"
 #include "esp_system.h"
 #include "network_time.hh"
 #include "pico.hh"               // pico_ll.ForceBlinkNetworkLED() for kAddrLEDBlink.
@@ -18,9 +20,9 @@
 #endif
 #elif defined(ON_TI)
 #include "cpu_utils.hh"
-#include "pico.hh"  // pico_ll.BlinkSubGLED() for kAddrLEDBlink.
-#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
+#include "pico.hh"
 #include "sub_ghz_radio.hh"
+#if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
 #include <ti/drivers/dpl/HwiP.h>
 #endif
 #endif
@@ -28,10 +30,10 @@
 #include "comms.hh"
 
 const uint8_t ObjectDictionary::kFirmwareVersionMajor = 0;
-const uint8_t ObjectDictionary::kFirmwareVersionMinor = 9;
-const uint8_t ObjectDictionary::kFirmwareVersionPatch = 1;
+const uint8_t ObjectDictionary::kFirmwareVersionMinor = 10;
+const uint8_t ObjectDictionary::kFirmwareVersionPatch = 0;
 // NOTE: Indicate a final release with RC = 0.
-const uint8_t ObjectDictionary::kFirmwareVersionReleaseCandidate = 11;
+const uint8_t ObjectDictionary::kFirmwareVersionReleaseCandidate = 1;
 
 const uint32_t ObjectDictionary::kFirmwareVersion = (kFirmwareVersionMajor << 24) | (kFirmwareVersionMinor << 16) |
                                                     (kFirmwareVersionPatch << 8) | kFirmwareVersionReleaseCandidate;
@@ -57,6 +59,18 @@ static bool CheckObjectBounds(const char* tag, const char* object_name, uint16_t
     }
     return true;
 }
+
+#if defined(ON_TI) && ADSBEE_SUBGHZ_PROTOCOL != ADSBEE_SUBGHZ_PROTOCOL_FLARM
+static bool ReadSyncPulse(const uint8_t* buf, uint16_t buf_len, uint16_t offset, ObjectDictionary::SyncPulse& pulse) {
+    if (buf_len != sizeof(pulse) || offset != 0) {
+        CONSOLE_ERROR("ObjectDictionary::SetBytes", "Buffer length %d and offset %d for writing SyncPulse must be %d and 0.",
+                      buf_len, offset, sizeof(pulse));
+        return false;
+    }
+    memcpy(&pulse, buf, sizeof(pulse));
+    return true;
+}
+#endif
 
 bool ObjectDictionary::SetBytes(Address addr, uint8_t* buf, uint16_t buf_len, uint16_t offset) {
     switch (addr) {
@@ -209,6 +223,8 @@ bool ObjectDictionary::SetBytes(Address addr, uint8_t* buf, uint16_t buf_len, ui
                 return false;
             }
             memcpy(&composite_device_status, buf, sizeof(CompositeDeviceStatus));
+            // The RP2040 sends its latest sync pulse's count with its status (0: none yet).
+            esp32_mlat_sync.HandleSyncPulse(composite_device_status.rp2040.sync_pulse.mlat_48mhz_counts);
             break;
         }
         case kAddrLEDBlink: {
@@ -235,6 +251,14 @@ bool ObjectDictionary::SetBytes(Address addr, uint8_t* buf, uint16_t buf_len, ui
             break;
         }
 #elif defined(ON_TI)
+#if ADSBEE_SUBGHZ_PROTOCOL != ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        case kAddrSyncPulse: {
+            SyncPulse pulse;
+            if (!ReadSyncPulse(buf, buf_len, offset, pulse)) return false;
+            subg_radio.HandleSyncPulse(pulse);
+            break;
+        }
+#endif
         case kAddrLEDBlink: {
             if (buf_len != sizeof(uint32_t) || offset != 0) {
                 CONSOLE_ERROR("ObjectDictionary::SetBytes",
@@ -643,8 +667,8 @@ void ObjectDictionary::UpdateDeviceStatus() {
         static_cast<uint32_t>(num_log_messages * LogMessage::kHeaderSize);
     device_status.num_queued_sc_command_requests = sc_command_request_queue.Length();
     device_status.num_queued_network_console_rx_chars = num_network_console_rx_chars;
-    device_status.num_network_console_clients =
-        static_cast<uint8_t>(MIN(adsbee_server.network_console.GetNumClients(), UINT8_MAX));
+    device_status.num_network_console_clients = static_cast<uint8_t>(
+        MIN(adsbee_server.network_console.GetNumClients() + (auto_update_manager.ReadsConsole() ? 1 : 0), UINT8_MAX));
     // Length of Remote ID packets queued for the RP2040 to pull (header-only == nothing pending). The RP2040 polls this
     // in ESP32::Update() and issues a kAddrCompositeArrayRawPackets read when it exceeds the header size. Mirrors the
     // CC1312's pending_raw_packets_len_bytes pull mechanism (see the ON_TI branch below).
@@ -656,6 +680,7 @@ void ObjectDictionary::UpdateDeviceStatus() {
     // Bring UTC back to timestamp_ms.
     device_status.network_utc_ms_of_day =
         (utc_ms_of_day + kMsPerDay - (utc_local_ms - device_status.timestamp_ms)) % kMsPerDay;
+    device_status.mlat_sync_flags = esp32_mlat_sync.GetMLATSyncFlags();
 #elif defined(ON_TI)
     device_status = {
         .timestamp_ms = get_time_since_boot_ms(),
@@ -674,6 +699,8 @@ void ObjectDictionary::UpdateDeviceStatus() {
         .num_valid_uat_uplink_packets = metrics.num_valid_uat_uplink_packets};
 #if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
     device_status.pending_raw_packets_len_bytes = flarm_packet_queue.Length() ? sizeof(FlarmBatch) : 0;
+#else
+    device_status.mlat_sync_flags = subg_radio.GetMLATSyncFlags();
 #endif
     // Reset metrics after reading.
     metrics = {0};

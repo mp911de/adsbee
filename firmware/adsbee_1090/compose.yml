@@ -11,6 +11,7 @@ services:
       - ./ti:/firmware/adsbee_1090/ti # Bind the TI directory so that its firmware can be packaged into the RP2040 image.
       - ../adsbee_1421/cmake:/firmware/adsbee_1421/cmake # fw_version.cmake for version-stamped artifacts.
       - ../scripts:/firmware/scripts # firmware_hashes.py for the release hash files.
+      - ../../software/adsbee_swarm/adsbee_swarm/protocols.json:/software/adsbee_swarm/adsbee_swarm/protocols.json:ro
       - .vscode:/firmware/adsbee_1090/.vscode
 
     command: tail -f /dev/null # keep the container running forever

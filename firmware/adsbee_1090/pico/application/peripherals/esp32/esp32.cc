@@ -67,7 +67,9 @@ bool ESP32::Update() {
         network_utc_time_valid = device_status.network_utc_time_valid;
         network_utc_ms_of_day = device_status.network_utc_ms_of_day;
         network_utc_timestamp_ms = get_time_since_boot_ms();
+        adsbee.sync_pulse_service.ReportFlags(SyncPulseService::kSubscriberESP32, device_status.mlat_sync_flags);
     } else {
+        adsbee.sync_pulse_service.ReportAbsent(SyncPulseService::kSubscriberESP32);
         if (!esp32.IsLinkDown()) {  // Don't repeat this every pass while the link is down.
             CONSOLE_ERROR("ESP32::Update", "Unable to read ESP32 status.");
         }
@@ -173,6 +175,11 @@ bool ESP32::Update() {
                 .gnss_utc_millisecond = static_cast<uint16_t>(utc_ms_of_day % 1000),
                 .noise_floor_mv = static_cast<uint16_t>(adsbee.GetNoiseFloorMilliVolts()),
                 .noise_floor_dbm = static_cast<int16_t>(adsbee.GetNoiseFloordBm()),
+                .r1090_rx_enabled = adsbee.Receiver1090IsEnabled(),
+                .subg_rx_enabled =
+                    bsp.has_subg && adsbee.subg_radio_ll.IsEnabled() && settings_manager.settings.subg_rx_enabled,
+                .subg_mode = settings_manager.settings.subg_mode,
+                .sync_pulse = adsbee.sync_pulse_service.GetLastPulse(),
             },
         .subg = adsbee.subg_radio_ll.device_status,
     };

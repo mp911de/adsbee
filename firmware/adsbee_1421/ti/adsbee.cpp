@@ -7,16 +7,19 @@
 #include <ti/drivers/GPIO.h>
 #include <ti/drivers/Power.h>
 #include <ti/drivers/dpl/ClockP.h>
+#include <ti/drivers/dpl/HwiP.h>
 #include <ti/drivers/power/PowerCC26XX.h>
 
 #include "buffer_utils.hh"
 #include "comms.hh"
 #include "cycle_counter.hh"
 #include "led.hh"
+#include "sync_policy.hh"
 #include "mlat/mlat_capture.hh"
 #include "mlat/mlat_clear_dma.hh"
 #include "packet_decoder.hh"
 #include "sub_ghz_radio.hh"
+#include "mlat_time_sync.hh"
 #include "uat_packet_decoder.hh"
 
 ADSBee::ADSBee(ADSBeeConfig config) : lr2021(config.lr2021_config), config_(config) {
@@ -69,7 +72,7 @@ uint32_t ADSBee::SyncPinConfig(bool asleep) const {
 void ADSBee::DetectBoardSyncPullDown() {
     SettingsManager::DeviceInfo device_info;
     settings_manager.GetDeviceInfo(device_info);
-    board_has_sync_pull_down_ = device_info.IsPartAtLeastRev(SettingsManager::DeviceInfo::kPNADSBeem1421, 'D');
+    board_has_sync_pull_down_ = ::BoardHasSyncPullDown(device_info);
 
     // Part number + revision letter, printable characters only (erased flash reads 0xFF).
     char part[SettingsManager::DeviceInfo::kPartCodePartNumberLen + 2] = {0};
@@ -95,7 +98,10 @@ bool ADSBee::Init() {
     // main()) so a device saved with AT+LR_ENABLE=0 parks the bus on the first receiver config instead
     // of briefly initializing the chip and driving the bus before SettingsManager::Apply() runs.
     lr2021_enabled_ = settings_manager.settings.lr2021_enabled;
-    return ApplyReceiverConfig();
+    if (SyncSleepRequested()) {
+        CONSOLE_INFO("ADSBee::Init", "SYNC high at boot: LR2021 bus left released, sleeping.");
+    }
+    return ApplyReceiverConfig();  // Leaves the bus released while SYNC is high.
 }
 
 bool ADSBee::SyncSleepRequested() { return sync_sleep_requested_ || GPIO_read(bsp.kSyncPin) == 1; }
@@ -248,30 +254,28 @@ bool ADSBee::ApplyReceiverConfigInner() {
     // active drain chain. (DeInit -> CancelAsync also disarms BUSY; this covers every path.)
     GPIO_disableInt(bsp.kLR2021IrqPin);
     GPIO_disableInt(bsp.kLR2021BusyPin);
-    // LR2021 interface disabled (AT+LR_ENABLE=0): release the shared bus to an external host. DeInit
-    // first (cancels any in-flight async DMA before SPI_close, drives ENABLE low for a crisp reset
-    // edge), then TristateInterface parks NSS (input, pull-up) and ENABLE/SCLK/PICO (inputs,
-    // pull-down). Both are idempotent, so every caller (boot, AT commands, sync-sleep wake, R1090_*
-    // setters) can funnel through here.
-    if (!lr2021_enabled_) {
-        receiver_config_rejected_ = false;  // Down by the user's choice; nothing is being retried.
-        lr2021.DeInit();
-        lr2021.TristateInterface();
-        return true;
+    // The host owns the bus (SYNC high, including at boot) or AT+LR_ENABLE=0: leave every bus pin an input.
+    // DeInit only writes the input pins' output latches and closes SPI. Nothing is driven before SYNC is low.
+    const bool sync_high = SyncSleepRequested();
+    switch (LR2021BusActionFor(sync_high, lr2021_enabled_, rx_1090_enabled_)) {
+        case LR2021BusAction::kRelease:
+            receiver_config_rejected_ = false;  // Down by choice; nothing is being retried.
+            receiver_released_for_sync_ = sync_high;
+            lr2021.DeInit();
+            lr2021.TristateInterface();
+            return true;
+        case LR2021BusAction::kHoldReset:
+            // 1090 RX disabled: drive NSS high and hold the chip in reset.
+            receiver_config_rejected_ = false;
+            receiver_released_for_sync_ = false;
+            lr2021.RestoreInterface();
+            lr2021.DeInit();
+            return true;
+        case LR2021BusAction::kConfigure:
+            break;
     }
-    // Re-drive NSS/ENABLE in case a prior AT+LR_ENABLE=0 or sync sleep parked them (GPIO_resetConfig
-    // restores the SysConfig OUT_HIGH defaults; the SPI pins re-mux on SPI_open in Init()). Harmless
-    // when already driven: the DeInit/Init below performs a full reset cycle regardless.
-    lr2021.RestoreInterface();
-    // 1090 RX disabled (AT+RX_ENABLE): hold the LR2021 in reset instead of configuring it. DeInit
-    // cancels any in-flight async transfer, closes SPI, and drives ENABLE low, so no reception and no
-    // interrupts. Every RX-arming path funnels through here (boot, gain/preamble/boost changes,
-    // sync-sleep wake), so none of them can re-enable a user-disabled receiver.
-    if (!rx_1090_enabled_) {
-        receiver_config_rejected_ = false;  // Down by the user's choice; nothing is being retried.
-        lr2021.DeInit();
-        return true;
-    }
+    receiver_released_for_sync_ = false;
+    lr2021.RestoreInterface();  // NSS high, NRESET low; SPI_open in Init() muxes SCLK/PICO.
     // Reconfigure from a clean hardware reset every time. The LR2021's RF/AGC/detector calibration
     // must be set up from standby (kStdbyRC); reconfiguring while the radio is in continuous RX
     // leaves it demodulating but never validating. DeInit()+Init() reproduces the exact known-good
@@ -399,6 +403,7 @@ void ADSBee::EnterSyncSleep() {
     GPIO_setCallback(bsp.kSyncPin, SyncLineCallback);
     GPIO_clearInt(bsp.kSyncPin);
     GPIO_enableInt(bsp.kSyncPin);
+    LogBusPins("sleep");
 
     // Let the console line go fully idle before sampling constraints below. UART2 holds
     // PowerCC26XX_DISALLOW_STANDBY from the start of a TX until its EOT interrupt, which lands after the
@@ -489,6 +494,7 @@ void ADSBee::EnterSyncSleep() {
         Power_disablePolicy();
     }
 
+    LogBusPins("wake");
     // SYNC is low: restore the sleep-request interrupt, clear the request, and re-init the receiver. If SYNC goes
     // high during re-init, the ISR sets the flag again and the main loop re-enters sync sleep.
     GPIO_disableInt(bsp.kSyncPin);
@@ -504,6 +510,12 @@ void ADSBee::EnterSyncSleep() {
     // writes — unless AT+LR_ENABLE=0, in which case it re-parks the bus without ever driving it
     // (calling RestoreInterface() here unconditionally would glitch RESET/NSS high on wake).
     ApplyReceiverConfig();
+}
+
+void ADSBee::LogBusPins(const char* when) {
+    CONSOLE_INFO("ADSBee::EnterSyncSleep", "Bus pins at %s: NSS=%d NRESET=%d SCLK=%d PICO=%d POCI=%d BUSY=%d.", when,
+                 GPIO_read(bsp.kLR2021CSPin), GPIO_read(bsp.kLR2021ResetPin), GPIO_read(bsp.kCoProSPICLKPin),
+                 GPIO_read(bsp.kCoProSPIMOSIPin), GPIO_read(bsp.kCoProSPIMISOPin), GPIO_read(bsp.kLR2021BusyPin));
 }
 
 void ADSBee::FeedWatchdog() {
@@ -701,12 +713,29 @@ void ADSBee::IngestAndForwardPackets() {
         }
     }
 
+    // Sub-GHz packets carry radio timer ticks; move them to the Mode S time base. The radio timer and the MLAT timer
+    // both run from the 48 MHz crystal, so one pair of readings fixes the offset.
+    uint16_t num_decoded_uat_adsb = uat_packet_decoder.decoded_uat_adsb_packet_out_queue.Length();
+    uint16_t num_decoded_uat_uplink = uat_packet_decoder.decoded_uat_uplink_packet_out_queue.Length();
+    MLATTimeSync sub_ghz_time_sync(MLATTimeSync::kMLATTicksPerRATTick);
+    if (num_decoded_uat_adsb > 0 || num_decoded_uat_uplink > 0) {
+        uintptr_t key = HwiP_disable();
+        uint32_t rat_now = RF_getCurrentTime();
+        uint32_t mlat_counter_now = mlat_active_ ? mlat_capture::Counter() : 0;
+        uint64_t timestamp_us = get_time_since_boot_us();
+        HwiP_restore(key);
+        // PollMlat() runs every main loop pass, well within one counter period.
+        sub_ghz_time_sync.AddSyncPoint(rat_now, mlat_active_ ? mlat_timebase_.ExtendForward(mlat_counter_now)
+                                                             : timestamp_us * MlatTimebase::kTicksPerUs);
+    }
+
     // Ingest decoded UAT ADS-B packets.
     DecodedUATADSBPacket decoded_uat_adsb_packet;
-    uint16_t num_decoded_uat_adsb = uat_packet_decoder.decoded_uat_adsb_packet_out_queue.Length();
     for (uint16_t i = 0; i < num_decoded_uat_adsb &&
                          uat_packet_decoder.decoded_uat_adsb_packet_out_queue.Dequeue(decoded_uat_adsb_packet);
          i++) {
+        decoded_uat_adsb_packet.raw.mlat_48mhz_64bit_counts = sub_ghz_time_sync.ToMLAT48MHzCounts(
+            static_cast<uint32_t>(decoded_uat_adsb_packet.raw.mlat_48mhz_64bit_counts));
         aircraft_dictionary.IngestDecodedUATADSBPacket(decoded_uat_adsb_packet);
         aircraft_dictionary.RecordSubGHzMetrics(0, 1, 0, 0);
         if (!comms_manager.uat_adsb_packet_reporting_queue.Enqueue(decoded_uat_adsb_packet.raw)) {
@@ -717,10 +746,11 @@ void ADSBee::IngestAndForwardPackets() {
     // Ingest decoded UAT uplink packets. The raw packet has already been FEC-corrected in place by the
     // decoder, so downstream reporters (e.g. GDL90) can re-decode it without another correction pass.
     DecodedUATUplinkPacket decoded_uat_uplink_packet;
-    uint16_t num_decoded_uat_uplink = uat_packet_decoder.decoded_uat_uplink_packet_out_queue.Length();
     for (uint16_t i = 0; i < num_decoded_uat_uplink &&
                          uat_packet_decoder.decoded_uat_uplink_packet_out_queue.Dequeue(decoded_uat_uplink_packet);
          i++) {
+        decoded_uat_uplink_packet.raw.mlat_48mhz_64bit_counts = sub_ghz_time_sync.ToMLAT48MHzCounts(
+            static_cast<uint32_t>(decoded_uat_uplink_packet.raw.mlat_48mhz_64bit_counts));
         aircraft_dictionary.RecordSubGHzMetrics(0, 0, 0, 1);
         if (!comms_manager.uat_uplink_packet_reporting_queue.Enqueue(decoded_uat_uplink_packet.raw)) {
             comms_manager.uat_report_queue_ovf_count++;  // Counted, not logged (see the Mode S queue above).
@@ -747,6 +777,11 @@ bool ADSBee::UpdateLR2021() {
     // an in-progress drain unwinds via the abort flag inside ServiceRxDrain(), which is expected, not
     // an error. The main loop enters sync sleep at the top of its next iteration.
     if (SyncSleepRequested()) {
+        return true;
+    }
+    if (receiver_released_for_sync_) {
+        // SYNC dropped before the main loop slept (e.g. a short pulse at boot): bring the receiver up now.
+        ApplyReceiverConfig();
         return true;
     }
     if (!lr2021_enabled_) {

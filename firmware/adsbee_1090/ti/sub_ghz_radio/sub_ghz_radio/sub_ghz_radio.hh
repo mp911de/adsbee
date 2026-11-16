@@ -22,6 +22,8 @@ extern "C" {
 #include "bsp.hh"
 // #include "buffer_utils.hh"
 #include "comms.hh"
+#include "mlat_time_sync.hh"
+#include "object_dictionary.hh"
 #include "unit_conversions.hh"
 #include "uat_packet.hh"
 
@@ -94,7 +96,33 @@ public:
     // events). Diagnostic only. Counted from the RF callback (software interrupt context).
     volatile uint32_t uat_len_mismatch_count = 0;
 
+    /**
+     * Sub-GHz packet timestamps go out on the RP2040's 48 MHz MLAT clock. The RP2040 pulses the SYNC line (DIO5) once a
+     * second and then writes the pulse's MLAT count (kAddrSyncPulse). The radio timer (RAT) captures each rising
+     * edge; pairing the two gives a sync point for time_sync_.
+     */
+    // Pairs a SyncPulse from the RP2040 with a captured edge (SyncPulsePairing). Main loop only.
+    void HandleSyncPulse(const ObjectDictionary::SyncPulse& pulse);
+    // Called from the RAT capture callback.
+    void HandleSyncCapture(uint32_t rat) { sync_pulse_pairing_.AddEdge(rat); }
+    // ObjectDictionary::MLATSyncFlag bits for the device status.
+    uint8_t GetMLATSyncFlags() const;
+
 private:
+    // Routes the sync pin to the radio timer and captures its rising edges. The RAT restarts with the RF client, so
+    // this also restarts the fit.
+    void StartSyncCapture();
+    // Frees the capture channel. Call before RF_close().
+    void StopSyncCapture();
+    RF_RatHandle sync_capture_handle_ = RF_ALLOC_ERROR;
+
+    // Two crystals (CC1312 and RP2040): timestamps start once a second sync point has measured the rate. Read by the RF
+    // callback, so changed with interrupts off.
+    MLATTimeSync time_sync_ = MLATTimeSync(MLATTimeSync::kMLATTicksPerRATTick, 2);
+    SyncPulsePairing sync_pulse_pairing_;  // Edges from the RAT capture callback: used with interrupts off.
+    uint32_t last_sync_point_timestamp_ms_ = 0;
+    uint32_t rat_start_timestamp_ms_ = 0;
+
     SubGHzRadioConfig config_;
 
     RF_Handle rf_handle_;

@@ -46,11 +46,10 @@ class SettingsMigrator {
     // firmware/AGENTS.md). To add v21: freeze v20 in settings_versions.hh, change MigrateV19ToV20 to emit
     // settings_v20::Settings, add MigrateV20ToV21 emitting the live struct, and extend Migrate()'s dispatch with a
     // `case 20:`. While the current version is unreleased, change MigrateV19ToV20 in place instead.
-    // MigrateV18ToV19 lands on the live struct directly: v20 adds only the two GNSS bytes, which take their defaults.
     static void MigrateV12ToV14(const settings_v12::Settings& in, settings_v14::Settings& out);
     static void MigrateV14ToV15(const settings_v14::Settings& in, settings_v15::Settings& out);
     static void MigrateV15ToV17(const settings_v15::Settings& in, settings_v17::Settings& out);
     static void MigrateV17ToV18(const settings_v17::Settings& in, settings_v18::Settings& out);
-    static void MigrateV18ToV19(const settings_v18::Settings& in, SettingsManager::Settings& out);
+    static void MigrateV18ToV19(const settings_v18::Settings& in, settings_v19::Settings& out);
     static void MigrateV19ToV20(const settings_v19::Settings& in, SettingsManager::Settings& out);
 };

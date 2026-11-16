@@ -119,11 +119,10 @@ void LR2021::TristateInterface() {
 }
 
 void LR2021::RestoreInterface() {
-    // Restore the GPIO-driven pins (NSS, ENABLE) to their driven SysConfig defaults (outputs). The SPI
-    // pins (SCLK/PICO/POCI) are re-muxed to the SPI peripheral by SPI_open() in the following Init(), so
-    // they need no manual restore here.
-    GPIO_resetConfig(config_.gpio_nss);
-    GPIO_resetConfig(config_.gpio_enable);
+    // Take the bus: NSS driven high (deselected), NRESET driven low (Init() releases it). The SysConfig defaults
+    // are inputs so the bus is released from boot. SCLK/PICO are muxed to SPI by SPI_open() in Init().
+    GPIO_setConfig(config_.gpio_nss, GPIO_CFG_OUTPUT_INTERNAL | GPIO_CFG_OUT_STR_MED | GPIO_CFG_OUT_HIGH);
+    GPIO_setConfig(config_.gpio_enable, GPIO_CFG_OUTPUT_INTERNAL | GPIO_CFG_OUT_STR_MED | GPIO_CFG_OUT_LOW);
 }
 
 // Private helpers
@@ -377,8 +376,13 @@ bool LR2021::SetOokADSB(SettingsManager::R1090PreambleMode preamble_mode, uint8_
 }
 
 #ifdef HARDWARE_UNIT_TESTS
-#ifdef ADSBEE_DEBUG_BUILD
 bool LR2021::StartCwTone(bool use_hf_path, uint32_t freq_hz, int8_t tx_power_dbm) {
+#ifndef ADSBEE_DEBUG_BUILD
+    // Release builds transmit CW on the HF (2.4 GHz) path only; the LF path folds out below.
+    if (!use_hf_path) {
+        return false;
+    }
+#endif
     // Begin from a clean standby state.
     if (!SetStandby(SysStandbyMode::kSysStandbyXosc)) {
         return SequenceStepFailed("LR2021::StartCwTone", "SetStandby");
@@ -454,7 +458,6 @@ bool LR2021::StopCwTone() {
     }
     return true;
 }
-#endif  // ADSBEE_DEBUG_BUILD
 
 bool LR2021::StartRssiScan(bool use_hf_path, uint32_t freq_hz) {
     // Reconfigure from a clean hardware reset (-> kStdbyRC), mirroring ADSBee::ApplyReceiverConfig():

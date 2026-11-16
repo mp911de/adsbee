@@ -41,6 +41,9 @@ class CommsManager {
     // ~80 ms at 1 Mbaud. Must be a power of two.
     static constexpr uint16_t kUartTxRingBytes = 8192;
     static_assert((kUartTxRingBytes & (kUartTxRingBytes - 1)) == 0, "kUartTxRingBytes must be a power of two.");
+    // Largest piece of the ring handed to one UART2_write. Ring space is freed only when a write completes, so small
+    // pieces free it steadily and keep the bounded wait for space accurate (256 B = 2.6 ms at 1 Mbaud).
+    static constexpr uint16_t kUartTxSegmentMaxBytes = 256;
 
     struct CommsManagerConfig {
         uint8_t uart_index = bsp.kSubGUARTIndex;
@@ -136,6 +139,8 @@ class CommsManager {
     CPP_AT_CALLBACK(ATDeviceInfoCallback);
     CPP_AT_HELP_CALLBACK(ATOTAHelpCallback);
     CPP_AT_CALLBACK(ATR1090GainCallback);
+    CPP_AT_CALLBACK(ATLEDBlinkCallback);
+    CPP_AT_CALLBACK(ATLEDEnableCallback);
     CPP_AT_CALLBACK(ATLogLevelCallback);
     CPP_AT_CALLBACK(ATLREnableCallback);
     CPP_AT_CALLBACK(ATASTERIXSACSICCallback);
@@ -156,9 +161,7 @@ class CommsManager {
     CPP_AT_CALLBACK(ATUptimeCallback);
     CPP_AT_CALLBACK(ATWatchdogCallback);
 #ifdef HARDWARE_UNIT_TESTS
-#ifdef ADSBEE_DEBUG_BUILD
-    CPP_AT_CALLBACK(ATTxCWCallback);  // Transmits RF: Debug builds only.
-#endif
+    CPP_AT_CALLBACK(ATTxCWCallback);  // Transmits RF: all bands in Debug builds, LRHF only in Release.
     CPP_AT_CALLBACK(ATRxCWCallback);
 #endif
 

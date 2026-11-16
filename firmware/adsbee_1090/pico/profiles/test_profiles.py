@@ -51,7 +51,7 @@ class BuildProfiles(unittest.TestCase):
                 self.assertIn(f"ADSBEE_COMMS_UART_CONSOLE={console}", self.definitions())
                 self.assertIn(f"ADSBEE_COMMS_UART_PARITY=UART_PARITY_{parity}", self.definitions())
                 self.assertEqual("AIRGREP" in self.definitions(), profile == "airgrep")
-                self.assertEqual("ADSBEE_GNSS_UART_BAUDRATE=38400" in self.definitions(), profile == "airgrep")
+                self.assertEqual("ADSBEE_GNSS_UART_BAUDRATE=115200" in self.definitions(), profile == "airgrep")
                 self.assertIn(f'ADSBEE_BUILD_PROFILE="{profile or "default"}"', self.definitions())
 
     def test_unset_restores_defaults_in_existing_build(self):
@@ -66,7 +66,7 @@ class BuildProfiles(unittest.TestCase):
         defaults = (PROFILES.parent / "application/peripherals/gnss/ublox_max_m10_defaults.hh").read_text()
         expected = {
             int(key, 16) for key in re.findall(
-                r"^\s*\{(0x[0-9a-f]+),.*// CFG-(?:MSGOUT|INFMSG)-\S+_UART1\b", defaults, re.M)
+                r"^\s*(?://\s*)?\{(0x[0-9a-f]+),.*// CFG-(?:MSGOUT|INFMSG)-\S+_UART1\b", defaults, re.M)
         }
         entries = re.findall(r"\{(0x[0-9a-f]+), (\d+)\}", (PROFILES / "airgrep_gnss.hh").read_text())
         selected = {int(key, 16): int(rate) for key, rate in entries}

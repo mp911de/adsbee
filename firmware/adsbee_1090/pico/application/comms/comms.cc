@@ -5,6 +5,7 @@
 
 #include "cpu_utils.hh"
 #include "esp32.hh"
+#include "pico/printf.h"  // For vfctprintf.
 #include "pico/stdlib.h"
 #include "hardware/irq.h"
 #include "spi_coprocessor.hh"
@@ -14,6 +15,14 @@
 static const CommsManager::ReportSink kReportingSinks[] = {SettingsManager::SerialInterface::kConsole,
                                                            SettingsManager::SerialInterface::kCommsUART};
 static const uint16_t kNumReportingSinks = sizeof(kReportingSinks) / sizeof(CommsManager::ReportSink);
+
+// The serial sinks with their protocols from the settings. Serial interfaces have no capabilities check: beast_caps 0.
+static uint16_t SerialReportSinks(CommsManager::ReportSinkInfo (&sinks)[kNumReportingSinks]) {
+    for (uint16_t i = 0; i < kNumReportingSinks; i++) {
+        sinks[i] = {kReportingSinks[i], settings_manager.settings.reporting_protocols[kReportingSinks[i]]};
+    }
+    return kNumReportingSinks;
+}
 
 CommsManager::CommsManager(CommsManagerConfig config_in)
     : config_(config_in), at_parser_(CppAT(at_command_list, at_command_list_num_commands, true)) {}
@@ -84,7 +93,9 @@ bool CommsManager::Update() {
             uint8_t no_packets_buf[sizeof(CompositeArray::RawPackets::Header)];
             CompositeArray::RawPackets no_packets = CompositeArray::PackRawPacketsBuffer(
                 no_packets_buf, sizeof(no_packets_buf), nullptr, nullptr, nullptr);
-            UpdateReporting(kReportingSinks, settings_manager.settings.reporting_protocols, kNumReportingSinks,
+            ReportSinkInfo sinks[kNumReportingSinks];
+            uint16_t num_sinks = SerialReportSinks(sinks);
+            UpdateReporting(sinks, num_sinks,
                             &no_packets);
         } else if (required_buffer_len >= CompositeArray::RawPackets::kMaxLenBytes || max_interval_elapsed) {
             ForceFlushRawPackets();
@@ -155,7 +166,9 @@ bool CommsManager::ForceFlushRawPackets() {
             esp32.Write(ObjectDictionary::kAddrCompositeArrayRawPackets, packets_to_report_buf, true,
                         packets_to_report.len_bytes);
         }
-        UpdateReporting(kReportingSinks, settings_manager.settings.reporting_protocols, kNumReportingSinks,
+        ReportSinkInfo sinks[kNumReportingSinks];
+        uint16_t num_sinks = SerialReportSinks(sinks);
+        UpdateReporting(sinks, num_sinks,
                         &packets_to_report);
     }
     if (mode_s_packet_reporting_queue.Length() > 0 || uat_adsb_packet_reporting_queue.Length() > 0 ||
@@ -233,10 +246,35 @@ int CommsManager::iface_printf(SettingsManager::SerialInterface iface, const cha
 
 int CommsManager::iface_vprintf(SettingsManager::SerialInterface iface, const char* format, va_list args) {
     char buf[kPrintfBufferMaxSize];
+    va_list args_again;
+    va_copy(args_again, args);
 
     CPUMonitor::WorkScope work;
     // Formatted print to buffer.
     int res = vsnprintf(buf, kPrintfBufferMaxSize, format, args);
+    if (res >= kPrintfBufferMaxSize) {
+        // Too long for buf: format it again with the SDK's streaming printf, writing out buf each time it fills.
+        struct Sink {
+            SettingsManager::SerialInterface iface;
+            char* buf;
+            uint16_t len;
+            bool ok;
+        } sink = {iface, buf, 0, true};
+        vfctprintf(
+            [](char c, void* arg) {
+                Sink* s = static_cast<Sink*>(arg);
+                s->buf[s->len++] = c;
+                if (s->len == kPrintfBufferMaxSize) {
+                    s->ok = comms_manager.iface_write(s->iface, s->buf, s->len) && s->ok;
+                    s->len = 0;
+                }
+            },
+            &sink, format, args_again);
+        va_end(args_again);
+        sink.ok = iface_write(iface, buf, sink.len) && sink.ok;
+        return sink.ok && comms_manager.UpdateNetworkConsole() ? res : -1;
+    }
+    va_end(args_again);
     if (res <= 0) {
         return res;  // vsnprintf failed.
     }

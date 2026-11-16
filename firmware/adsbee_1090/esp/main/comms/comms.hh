@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "data_structures.hh"
 #include "driver/gpio.h"
 #include "esp_eth.h"
@@ -12,6 +14,7 @@
 #include "freertos/task.h"
 // #include "gdl90/gdl90_utils.hh"
 #include "aircraft_dictionary_config.hh"
+#include "beast_utils.hh"
 #include "composite_array.hh"
 #include "feed_send_buffer.hh"
 #include "lwip/sockets.h"  // For port definition.
@@ -239,6 +242,13 @@ class CommsManager {
 
     // IP versions used on Ethernet and the WiFi station. Takes effect when those interfaces are initialized.
     SettingsManager::IPMode ip_mode = SettingsManager::kIPModeIPv4;
+    // DHCP or static IPv4 on Ethernet and the WiFi station. Takes effect when the interface connects.
+    IPv4Config ethernet_ipv4;
+    IPv4Config wifi_sta_ipv4;
+    // AUTO (SLAAC) or static IPv6 on Ethernet and the WiFi station. Takes effect when the interface is initialized
+    // (SLAAC on or off) and when it connects (the address).
+    IPv6Config ethernet_ipv6;
+    IPv6Config wifi_sta_ipv6;
 
     // Ethernet public variables.
     bool ethernet_enabled = false;
@@ -288,6 +298,11 @@ class CommsManager {
     bool SendBuf(uint16_t iface, const char* buf, uint16_t buf_len, uint16_t num_msgs = 1);
 
     /**
+     * Whether a connected feed agreed on Remote ID frames. Read by the main task to queue Remote ID packets for feeds.
+     */
+    bool FeedsTakeRemoteID() const { return feeds_take_remote_id_.load(std::memory_order_relaxed); }
+
+    /**
      * Handles events of the MQTT client. Public so that the pass-through function can access it.
      */
     void MQTTEventHandler(int32_t event_id, esp_mqtt_event_handle_t event);
@@ -302,6 +317,15 @@ class CommsManager {
     bool PollFeedSocketConnect(uint16_t feed_index);
     bool FinishFeedSocketConnect(uint16_t feed_index);
     void CloseFeedSocket(uint16_t feed_index);
+
+    /**
+     * Reads what the server sent on a TCP Beast feed without blocking: looks for the capabilities answer and drops the
+     * rest. Reads every call while the answer can arrive, then once per kFeedRecvDrainIntervalMs.
+     */
+    void ReceiveFeedSocket(uint16_t feed_index);
+
+    // Capability bits a Beast feed's query offers (kBeastCapsSendable, Remote ID only while receive is on).
+    uint16_t BeastCapsToOffer();
 
     // CRC of the settings a feed connects with, to reconnect it when they change.
     uint32_t FeedConfigCRC(uint16_t feed_index);
@@ -362,7 +386,25 @@ class CommsManager {
     /**
      * Sets the DHCP client and SLAAC flags of an Ethernet or WiFi station netif config for ip_mode.
      */
-    void ApplyIPModeToNetifConfig(esp_netif_inherent_config_t& base);
+    void ApplyIPModeToNetifConfig(esp_netif_inherent_config_t& base, const IPv6Config& ipv6);
+
+    /**
+     * Gives an Ethernet or WiFi station netif its static IPv6 address and gateway, if config has one and ip_mode uses
+     * IPv6. Call when the link is up, after the link-local address is created.
+     */
+    void ApplyStaticIPv6(esp_netif_t* netif, const IPv6Config& config);
+
+    /**
+     * Sets the shared DNS servers from the interface's static IPv4 and IPv6 configurations (IPv4 first, up to three),
+     * if either has any. Does nothing otherwise, so DHCP's, the router's or the other interface's servers stay.
+     */
+    void ApplyStaticDNS(esp_netif_t* netif);
+
+    /**
+     * Gives an Ethernet or WiFi station netif its static IPv4 address, if config has one and ip_mode uses IPv4. Call
+     * when the link comes up, before the netif's own connected handler, so the DHCP client never starts.
+     */
+    void ApplyStaticIPv4(esp_netif_t* netif, const IPv4Config& config);
 
     /**
      * Writes an interface's IPv6 link-local address and its first global or unique local address as strings (empty if
@@ -443,6 +485,13 @@ class CommsManager {
     uint32_t mqtt_metrics_last_publish_timestamp_ms_ = 0;
     // Each feed sends through its own buffer so that a slow or stalled feed only loses its own messages.
     FeedSendBuffer feed_send_buffers_[SettingsManager::Settings::kMaxNumFeeds];
+    // Capabilities check of each TCP Beast feed's connection, and whether its socket is still read.
+    BeastReporter::CapsSession feed_caps_[SettingsManager::Settings::kMaxNumFeeds];
+    bool feed_rx_open_[SettingsManager::Settings::kMaxNumFeeds] = {false};
+    uint32_t feed_rx_last_drain_timestamp_ms_[SettingsManager::Settings::kMaxNumFeeds] = {0};
+    // Written by IPWANTask, read by the main task. Relaxed: it only gates queueing, and no other data is published
+    // through it (the Remote ID packets reach IPWANTask by the WAN queue).
+    std::atomic<bool> feeds_take_remote_id_ = false;
     uint32_t feed_num_dropped_msgs_[SettingsManager::Settings::kMaxNumFeeds] = {0};
     // Time IPWANTask may still spend waiting for room on each feed (see kFeedWaitBudgetMs).
     uint16_t feed_wait_budget_ms_[SettingsManager::Settings::kMaxNumFeeds] = {0};

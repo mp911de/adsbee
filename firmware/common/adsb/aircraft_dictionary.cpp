@@ -1542,6 +1542,9 @@ void AircraftDictionary::Update(uint32_t timestamp_ms) {
                       (unsigned)kMaxNumAircraft, (unsigned)evictions);
     }
 
+#ifdef SWARM_RECORDING
+    uint16_t num_swarm_aircraft = 0;
+#endif
     // Iterate over each key-value pair in the unordered_map. Prune if stale, update metrics if still fresh.
     for (auto it = dict.begin(); it != dict.end(); /* No increment here */) {
         uint32_t last_message_timestamp_ms =
@@ -1580,11 +1583,12 @@ void AircraftDictionary::Update(uint32_t timestamp_ms) {
                     }
                 },
                 it->second);
-            if constexpr (kSwarmRecording) {
-                if (swarm_recorder_ != nullptr && !std::holds_alternative<RemoteIDAircraft>(it->second)) {
-                    swarm_recorder_->MarkAircraft(it->first);
-                }
+#ifdef SWARM_RECORDING
+            if (swarm_recorder_ != nullptr && CountsAsAircraft(it->second)) {
+                swarm_recorder_->MarkAircraft(it->first);
+                num_swarm_aircraft++;
             }
+#endif
 
             // Update lowest GNSS altitude if available.
             bool has_valid_gnss_altitude = false;
@@ -1623,9 +1627,9 @@ void AircraftDictionary::Update(uint32_t timestamp_ms) {
     }
 
     // Update aggregate statistics.
-    if (kSwarmRecording && swarm_recorder_ != nullptr) {
-        swarm_recorder_->NoteAircraftCount(metrics_counter_.num_mode_s_aircraft + metrics_counter_.num_uat_aircraft);
-    }
+#ifdef SWARM_RECORDING
+    if (swarm_recorder_ != nullptr) swarm_recorder_->NoteAircraftCount(num_swarm_aircraft);
+#endif
     address_parity_correction_attempts_ = 0;
     metrics = metrics_counter_;    // Swap counter values over to publicly visible values.
     metrics_counter_ = Metrics();  // Use default constructor to clear all values.
@@ -2000,6 +2004,12 @@ bool AircraftDictionary::CorrectAddressParityPacket(DecodedModeSPacket& packet) 
     // replying with that address: stop correcting an address that repeats. The data bit flips are undone first, so
     // the address is the sender's even when its reply had another error.
     uint16_t first_parity_bit = len_bits - kAddressParityFieldNumBits;
+    // Two flips in the parity field explain the reply no better than an untracked aircraft whose address is a few
+    // bits away and whose reply had one bit error, so only one flip there may be made without data bit flips.
+    if (best_num_bits == 2 && fit_bits[0] >= first_parity_bit && fit_bits[1] >= first_parity_bit) {
+        metrics_counter_.corrected_frames[kCorrectionRejected]++;
+        return false;
+    }
     if (fit_bits[best_num_bits - 1] >= first_parity_bit) {
         uint32_t sender_address = packet.crc_syndrome;
         for (uint16_t i = 0; i < best_num_bits; i++) {

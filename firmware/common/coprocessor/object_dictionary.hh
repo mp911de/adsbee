@@ -49,9 +49,10 @@ class ObjectDictionary {
     static constexpr uint16_t kNetworkConsoleMutexTimeoutMs = 5;  // Max wait for network_console_rx_queue_mutex in SPI task context.
 #endif
     // CC1312 queues of decoded packets waiting for the RP2040. A UAT frame carries up to 32 ground uplinks within
-    // 176 ms, less than two RP2040 polls apart, so the uplink queue holds all of them. The ADS-B queue holds two
-    // composite array reads, so a burst survives until the RP2040's next poll.
-    static constexpr uint16_t kDecodedUATADSBPacketQueueDepth = 64;
+    // 176 ms, less than two RP2040 polls apart, so the uplink queue holds all of them. The ADS-B queue overwrites its
+    // oldest packet when full, so it must hold everything that arrives before the RP2040's first poll of a burst: up to
+    // CC1312::kIdlePollIntervalMs plus one RP2040 main loop pass (~80 ms), 96 packets up to about 1,200/s.
+    static constexpr uint16_t kDecodedUATADSBPacketQueueDepth = 96;
     static constexpr uint16_t kDecodedUATUplinkPacketQueueDepth = 32;
 
     enum Address : uint8_t {
@@ -79,6 +80,7 @@ class ObjectDictionary {
         kAddrESP32FirmwareHash = 0x15,  // SHA-256 of the running ESP32 application (see ESP32FirmwareCheck).
         kAddrFlarmPackets = 0x14,  // Local CC1312 -> RP2040 safety traffic only.
         kAddrFlarmTargets = 0x15,  // Resolved RP2040 -> ESP32 target snapshot.
+        kAddrSyncPulse = 0x16,          // SyncPulse, RP2040 to CC1312 after each sync pulse.
         kNumAddrs
     };
 
@@ -131,6 +133,28 @@ class ObjectDictionary {
         std::function<void()> complete_callback = nullptr;
     };
 
+    /**
+     * The RP2040 pulses the shared SYNC line once a second and gives each coprocessor the MLAT count of the latest
+     * pulse's edge: the ESP32 in every RP2040 status write (RP2040DeviceStatus::sync_pulse), the CC1312 in one
+     * kAddrSyncPulse write per pulse. Each pairs it with the edge it captured on its own clock (SyncPulsePairing) to
+     * put its packet timestamps on the MLAT time base.
+     */
+    struct __attribute__((__packed__)) SyncPulse {
+        uint64_t mlat_48mhz_counts = 0;  // RP2040 MLAT counter at the rising edge. 0: no pulse yet.
+    };
+    // Crystal drift on a 1090U (t-1185): pulses every second keep the fit at the capture noise (CC1312 0.11 us rms,
+    // ESP32 0.04 us rms); every 10 s would add ~0.06 and ~0.1 us rms, more while the crystals warm up after a boot.
+    static constexpr uint32_t kSyncPulseIntervalMs = 1000;
+    // A fit this long without a new sync point is dropped (pulses stopped). Above the longest gap between points under
+    // output overload (RP2040 main loop passes of 2.5 s give points up to ~3.75 s apart). At most
+    // MLATTimeSync::kMaxExtrapolationUs.
+    static constexpr uint32_t kSyncPointMaxAgeMs = 5'000;
+
+    // MLAT time sync state of a coprocessor (mlat_sync_flags in SubGHzDeviceStatus and ESP32DeviceStatus).
+    enum MLATSyncFlag : uint8_t {
+        kMLATSyncFlagSynced = 1 << 0,  // Packet timestamps are on the MLAT time base.
+    };
+
     struct __attribute__((packed)) RP2040DeviceStatus {
         uint32_t timestamp_ms = 0;
         int8_t temperature_deg_c = 0;
@@ -155,6 +179,11 @@ class ObjectDictionary {
         // level sits at noise_floor_mv + TL offset.
         uint16_t noise_floor_mv = 0;
         int16_t noise_floor_dbm = 0;
+        // Receivers running now. AT commands change these before the ESP32's settings copy is synced.
+        bool r1090_rx_enabled = false;
+        bool subg_rx_enabled = false;  // Sub-GHz radio on and receiving.
+        SettingsManager::SubGHzRadioMode subg_mode = SettingsManager::kSubGHzRadioModeUATRx;
+        SyncPulse sync_pulse;  // The latest sync pulse. The ESP32 takes each count once.
     };
 
     struct __attribute__((__packed__)) ESP32DeviceStatus {
@@ -192,6 +221,8 @@ class ObjectDictionary {
         // UTC from SNTP, valid while an output uses ASTERIX and the ESP32 has synced. Holds UTC at timestamp_ms.
         bool network_utc_time_valid = false;
         uint32_t network_utc_ms_of_day = 0;
+
+        uint8_t mlat_sync_flags = 0;  // MLATSyncFlag bits, for Remote ID timestamps.
     };
 
     enum ESP32HardwareCapability : uint8_t {
@@ -253,6 +284,10 @@ class ObjectDictionary {
         char wifi_sta_ip6_link_local[kIP6AddrStrLen + 1] = {0};
         char wifi_sta_ip6_global[kIP6AddrStrLen + 1] = {0};
 
+        // DNS servers in use (empty if none). All interfaces share them.
+        static constexpr uint16_t kNumDNSServers = 2;
+        char dns_servers[kNumDNSServers][kIP6AddrStrLen + 1] = {};
+
         ESP32NetworkInfo() {
             for (uint16_t i = 0; i < SettingsManager::Settings::kWiFiMaxNumClients; i++) {
                 memset(wifi_ap_client_ips[i], 0x0, SettingsManager::Settings::kIPAddrStrLen + 1);
@@ -278,6 +313,8 @@ class ObjectDictionary {
         uint16_t num_valid_uat_adsb_packets = 0;
         uint16_t num_raw_uat_uplink_packets = 0;
         uint16_t num_valid_uat_uplink_packets = 0;
+
+        uint8_t mlat_sync_flags = 0;  // MLATSyncFlag bits, for sub-GHz packet timestamps.
     };
 
     /**

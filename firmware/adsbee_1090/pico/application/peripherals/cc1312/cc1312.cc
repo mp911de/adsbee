@@ -114,6 +114,7 @@ bool CC1312::Init(bool spi_already_initialized) {
 }
 
 bool CC1312::Update() {
+    last_poll_timestamp_ms_ = get_time_since_boot_ms();
     more_raw_packets_pending_ = false;
     raw_packets_arriving_ = false;
     // Report a lost link once; reads fail fast and quietly while it stays down (see SPILinkGate).
@@ -131,6 +132,19 @@ bool CC1312::Update() {
         adsbee.aircraft_dictionary.RecordSubGHzMetrics(
             device_status.num_raw_uat_adsb_packets, device_status.num_valid_uat_adsb_packets,
             device_status.num_raw_uat_uplink_packets, device_status.num_valid_uat_uplink_packets);
+
+        adsbee.sync_pulse_service.ReportFlags(SyncPulseService::kSubscriberCC1312, device_status.mlat_sync_flags);
+        if (!in_bootloader_ && IsEnabled()) {
+            adsbee.sync_pulse_service.Allow();  // The application just answered a status read.
+        }
+#if ADSBEE_SUBGHZ_PROTOCOL != ADSBEE_SUBGHZ_PROTOCOL_FLARM
+        // A new sync pulse's count, once, in one small un-acked write: there is no RP2040 -> CC1312 status write to
+        // carry it. A lost write only costs this sync point.
+        ObjectDictionary::SyncPulse pulse;
+        if (adsbee.sync_pulse_service.TakeNewPulse(pulse)) {
+            adsbee.subg_radio.Write(ObjectDictionary::Address::kAddrSyncPulse, pulse);
+        }
+#endif
 
 #if ADSBEE_SUBGHZ_PROTOCOL == ADSBEE_SUBGHZ_PROTOCOL_FLARM
         if (uint32_t(device_status.timestamp_ms - previous_device_timestamp) >= 0x80000000u)
@@ -174,32 +188,49 @@ bool CC1312::Update() {
             if (!adsbee.subg_radio.Write(ObjectDictionary::kAddrRollQueue, roll, true)) return false;
         }
 #else
-        // Read one array of packets from the queues. The CC1312 fills it with as many packets as fit.
-        uint8_t read_buf[CompositeArray::RawPackets::kMaxLenBytes] = {0};
-        if (!adsbee.subg_radio.Read(
-                ObjectDictionary::Address::kAddrCompositeArrayRawPackets, read_buf,
-                CompositeArray::RawPackets::ReadLenBytes(device_status.pending_raw_packets_len_bytes))) {
-            CONSOLE_ERROR("CC1312::Update", "Unable to read CC1312 raw packet array.");
-            return false;
-        }
+        // Nothing queued: skip the packet array read, so an idle poll is one status read (as on the ESP32).
         more_raw_packets_pending_ = CompositeArray::RawPackets::MorePending(device_status.pending_raw_packets_len_bytes);
         raw_packets_arriving_ =
             device_status.pending_raw_packets_len_bytes > sizeof(CompositeArray::RawPackets::Header);
-        if (!CompositeArray::UnpackRawPacketsBufferToQueues(read_buf, sizeof(read_buf), nullptr,
-                                                            &adsbee.raw_uat_adsb_packet_queue,
-                                                            &adsbee.raw_uat_uplink_packet_queue)) {
-            CONSOLE_ERROR("CC1312::Update", "Failed to unpack raw packets from CC1312.");
-            return false;
+        if (raw_packets_arriving_) {
+            // Read one array of packets from the queues. The CC1312 fills it with as many packets as fit.
+            uint8_t read_buf[CompositeArray::RawPackets::kMaxLenBytes] = {0};
+            if (!adsbee.subg_radio.Read(
+                    ObjectDictionary::Address::kAddrCompositeArrayRawPackets, read_buf,
+                    CompositeArray::RawPackets::ReadLenBytes(device_status.pending_raw_packets_len_bytes))) {
+                more_raw_packets_pending_ = false;
+                raw_packets_arriving_ = false;
+                CONSOLE_ERROR("CC1312::Update", "Unable to read CC1312 raw packet array.");
+                return false;
+            }
+            if (!CompositeArray::UnpackRawPacketsBufferToQueues(read_buf, sizeof(read_buf), nullptr,
+                                                                &adsbee.raw_uat_adsb_packet_queue,
+                                                                &adsbee.raw_uat_uplink_packet_queue)) {
+                CONSOLE_ERROR("CC1312::Update", "Failed to unpack raw packets from CC1312.");
+                return false;
+            }
         }
 #endif
 
     } else {
+        BlockSyncPulses();  // The CC1312 may be resetting.
         if (!link_was_down) CONSOLE_ERROR("CC1312::Update", "Unable to read CC1312 status.");
         return false;
     }
 
     last_update_timestamp_ms_ = get_time_since_boot_ms();
     return true;
+}
+
+void CC1312::BlockSyncPulses() {
+    adsbee.sync_pulse_service.Block();
+    adsbee.sync_pulse_service.ReportAbsent(SyncPulseService::kSubscriberCC1312);
+}
+
+void CC1312::AllowSyncPulsesInReset() {
+    if (enabled_ == SettingsManager::EnableState::kEnableStateDisabled) {
+        adsbee.sync_pulse_service.Allow();
+    }
 }
 
 bool CC1312::ApplicationIsUpToDate() {
