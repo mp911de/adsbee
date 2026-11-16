@@ -630,7 +630,8 @@ TEST(GDL90Utils, ForeFlightIDMessage) {
     EXPECT_EQ(payload[1], 0x00);
     EXPECT_EQ(payload[2], 1);
     for (uint16_t i = 3; i < 11; i++) EXPECT_EQ(payload[i], 0xFF);  // Invalid serial number.
-    for (uint16_t i = 11; i < 39; i++) EXPECT_EQ(payload[i], 0x00);
+    EXPECT_EQ(memcmp(payload + 11, "ADSBee\0\0", 8), 0);             // GDL90_DEVICE_NAME.
+    for (uint16_t i = 19; i < 39; i++) EXPECT_EQ(payload[i], 0x00);
 
     data.serial_number = 0x0102030405060708;
     strcpy(data.device_name, "ADSBee");
@@ -677,6 +678,19 @@ TEST(GDL90Utils, ForeFlightAHRSMessage) {
     uint8_t clamped[] = {0x65, 0x01, 0x7F, 0xFF, 0x7F, 0xFF, 0x0A, 0x8C, 0xFF, 0xFE, 0x00, 102};
     ASSERT_EQ(len, sizeof(clamped));
     EXPECT_EQ(memcmp(payload, clamped, len), 0);
+}
+
+TEST(GDL90Utils, BuildForeFlightIDData) {
+    uint8_t receiver_id[8] = {0xBE, 0xE0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
+    GDL90Reporter::ForeFlightIDData data = GDL90Reporter::BuildForeFlightIDData(receiver_id, "0.9.1");
+    EXPECT_EQ(data.serial_number, 0xBEE0010203040506);
+    EXPECT_STREQ(data.device_name, "ADSBee");
+    EXPECT_STREQ(data.device_long_name, "ADSBee 0.9.1");
+    EXPECT_TRUE(data.geometric_altitude_is_msl);
+    EXPECT_EQ(data.internet_policy, GDL90Reporter::ForeFlightIDData::kInternetPolicyUnrestricted);
+
+    data = GDL90Reporter::BuildForeFlightIDData(receiver_id, "10.11.12-rc13");
+    EXPECT_STREQ(data.device_long_name, "ADSBee 10.11.12-");  // Truncated to 16 bytes.
 }
 
 TEST(GDL90Utils, UATTORTicksAre80Nanoseconds) {

@@ -6,6 +6,14 @@
 #include "macros.hh"    // for MIN macro.
 #include "settings.hh"  // for SettingsManager::RxPosition.
 
+// Device identity in the ForeFlight ID message, overridable per device.
+#ifndef GDL90_DEVICE_NAME
+#define GDL90_DEVICE_NAME "ADSBee"
+#endif
+#ifndef GDL90_INTERNET_POLICY
+#define GDL90_INTERNET_POLICY 0  // ForeFlightIDData::InternetPolicy.
+#endif
+
 // GDL90 is implemented based on this spec:
 // https://www.faa.gov/sites/faa.gov/files/air_traffic/technology/adsb/archival/GDL90_Public_ICD_RevA.PDF
 // Message 0x65 follows the ForeFlight GDL90 Extended Specification.
@@ -52,10 +60,10 @@ class GDL90Reporter {
         };
 
         uint64_t serial_number = UINT64_MAX;  // All ones = invalid.
-        char device_name[9] = "";             // 8 UTF-8 bytes, zero padded.
-        char device_long_name[17] = "";       // 16 UTF-8 bytes, zero padded.
+        char device_name[9] = GDL90_DEVICE_NAME;  // 8 UTF-8 bytes, zero padded.
+        char device_long_name[17] = "";           // 16 UTF-8 bytes, zero padded.
         bool geometric_altitude_is_msl = false;
-        InternetPolicy internet_policy = kInternetPolicyUnrestricted;
+        InternetPolicy internet_policy = static_cast<InternetPolicy>(GDL90_INTERNET_POLICY);
     };
 
     // Sent at 5 Hz. ForeFlight rejects the whole message when an angle is out of range, so out of range angles are
@@ -207,6 +215,13 @@ class GDL90Reporter {
 
     uint16_t WriteGDL90OwnshipGeoAltitudeMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
                                                  const OwnshipGeoAltitudeData& data);
+    /**
+     * Populate a ForeFlight ID message for this device. The long name is GDL90_DEVICE_NAME and the version, truncated
+     * to 16 bytes. Geometric altitude is declared MSL since it comes from the GNSS GGA altitude.
+     * @param[in] receiver_id 8 byte unique receiver ID, used as the serial number, MSB first.
+     * @param[in] firmware_version Firmware version string, e.g. "0.9.1".
+     */
+    static ForeFlightIDData BuildForeFlightIDData(const uint8_t receiver_id[8], const char* firmware_version);
     uint16_t WriteForeFlightIDMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const ForeFlightIDData& data);
     uint16_t WriteForeFlightAHRSMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const ForeFlightAHRSData& data);
 

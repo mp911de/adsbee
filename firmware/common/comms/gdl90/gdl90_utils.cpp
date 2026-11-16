@@ -253,6 +253,18 @@ uint16_t GDL90Reporter::WriteGDL90OwnshipGeoAltitudeMessage(uint8_t* to_buf, uin
     return WriteGDL90Message(to_buf, to_buf_num_bytes, message_buf, sizeof(message_buf));
 }
 
+GDL90Reporter::ForeFlightIDData GDL90Reporter::BuildForeFlightIDData(const uint8_t receiver_id[8],
+                                                                     const char* firmware_version) {
+    ForeFlightIDData data;
+    data.serial_number = 0;
+    for (uint16_t i = 0; i < 8; i++) {
+        data.serial_number = (data.serial_number << 8) | receiver_id[i];
+    }
+    snprintf(data.device_long_name, sizeof(data.device_long_name), "%s %s", GDL90_DEVICE_NAME, firmware_version);
+    data.geometric_altitude_is_msl = true;
+    return data;
+}
+
 uint16_t GDL90Reporter::WriteForeFlightIDMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
                                                  const ForeFlightIDData& data) {
     uint8_t message_buf[39] = {};
