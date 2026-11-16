@@ -48,10 +48,68 @@ AT+GNSS=1,UBX_MIA,0,1
 AT+SETTINGS=SAVE
 ```
 
+## GNSS frame (airgrep profile only)
+
+The airgrep build pushes the receiver state once per second to every AIRGREP
+output, so a host does not poll `AT+GNSS_FIX?` and `AT+GNSS_STATUS?`. It is
+independent of the diagnostics flag and is sent while no AT command is active.
+
+```text
+#GNSS:<fix>,<quality>,<sats>,<lat>,<lon>,<alt>,<speed>,<track>,<hdop>,<utc>,<epoch>,<antenna>,<antenna_power>,<jamming>,<max_cno>,<seen>,<no_signal>,<searching>,<acquired>,<unusable>,<locked>,<ephemeris>,<used>,<healthy>,<unhealthy>,<sbas_mode>,<sbas_system>,<sbas_sats>,<prc_cm>,<ic_cm>,<module>,<software>,<hardware>,<bbr>,<CRC16>\r\n
+```
+
+The fields from `max_cno` on carry the `AT+GNSS_STATUS?` content with the same
+names, values and strings, except that a missing or stale value is an empty
+field instead of `-1` or `UNKNOWN`. Text fields never contain a comma; a comma
+in a module string is replaced by a space. The longest frame is 272 wire bytes,
+the sender buffer holds 320.
+
+### Time ping (airgrep profile only)
+
+`AT+TIME_PING=<echo>` measures link latency and clock offset. `echo` is an
+opaque token of 1 to 20 decimal digits chosen by the host, typically its send
+timestamp. The reply is one line, then `OK`:
+
+```text
+TIME_PING=<echo>,<epoch_ms>,<pps_count>\r\n
+OK\r\n
+```
+
+`echo` returns unchanged. `epoch_ms` is the PPS disciplined UTC unix time in
+milliseconds when the reply was formatted, the same clock as the `#GNSS`
+`epoch` field, empty when unavailable. `pps_count` is the PPS edge count as in
+`AT+GNSS_FIX?`, `0` without GNSS. The handler reads no bus and logs nothing, so
+the reply delay after the command is parsed is constant. `AT+TIME_PING?`,
+a bare `AT+TIME_PING`, or a token with other characters return `ERROR`.
+
+| Field | Contract |
+|---|---|
+| `fix` | `1` when the fix is valid and fresh, as `AT+GNSS_FIX?` reports it, else `0`. |
+| `quality` | GGA fix quality, `0` no fix, `1` GPS, `2` DGPS/SBAS. |
+| `sats` | Satellites used in the fix. |
+| `lat`, `lon` | WGS84 degrees, six decimals, north and east positive. Empty unless `fix` is `1`. |
+| `alt` | MSL altitude in feet. Empty unless `fix` is `1`. |
+| `speed` | Ground speed in knots. Empty unless `fix` is `1`. |
+| `track` | Course over ground in degrees true, one decimal. Empty unless `fix` is `1`. |
+| `hdop` | Two decimals. Empty when GGA did not report it. |
+| `utc` | `HHMMSS` of the last NMEA time. Empty until a time is received. |
+| `epoch` | UTC unix milliseconds, PPS disciplined when available. Empty without a dated RMC. |
+| `antenna`, `antenna_power`, `jamming` | UBX-MON-RF codes as in `MON` frames. Empty when the RF record is missing or older than 15 s. |
+| `max_cno` to `unhealthy` | As in `AT+GNSS_STATUS?`. Empty when the NAV-SAT record is missing or older than 15 s. |
+| `sbas_mode`, `sbas_system`, `sbas_sats`, `prc_cm`, `ic_cm` | As in `AT+GNSS_STATUS?`. All empty when NAV-SBAS is missing or stale; `prc_cm` and `ic_cm` also empty without a corrected satellite. |
+| `module`, `software`, `hardware` | UBX-MON-VER strings, e.g. `MAX-M10S`, `ROM SPG 5.10 (7b202e)`. Empty until the module answered. |
+| `bbr` | `OK` when BBR held the SBAS configuration at init, else empty. |
+| `CRC16` | As in `#M10`, over `#` through the last comma. |
+
+```text
+#GNSS:0,0,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,2695\r\n
+#GNSS:1,2,11,50.500000,-8.250000,1234,87,271.5,0.90,070509,1762588800123,2,1,1,47,24,5,4,3,2,10,12,11,13,1,ENABLED,EGNOS,2,-312,45,MAX-M10S,ROM SPG 5.10 (7b202e),00000A00,OK,<CRC16>\r\n
+```
+
 ## Wire frame
 
 ```text
-#M10:<length>:<kind>:<id>:<part>/<count>:<payload>*<CRC16>\r\n
+#M10:<length>:<kind>:<id>:<part>/<count>:<payload>,<CRC16>\r\n
 ```
 
 | Field | Contract |
@@ -62,15 +120,15 @@ AT+SETTINGS=SAVE
 | `part` | Two decimal digits, `01` through `63`, identifying this fragment. |
 | `count` | Two decimal digits, `01` through `63`, identifying the total fragment count. |
 | `payload` | At most 160 bytes of the escaped logical payload. |
-| `CRC16` | Exactly four uppercase hexadecimal digits. |
+| `CRC16` | One to four uppercase hexadecimal digits, without leading zeros, as in CSBee. |
 | `\r\n` | Two actual line-ending bytes, not their printed escape sequences. |
 
 An unfragmented message uses `01/01`. Every fragment of one logical message has
 the same kind, ID, and count. Part numbers increase from 1 through count.
-The length excludes the prefix, headers, CRC, and line ending. No NUL byte is
+The length excludes the prefix, headers, checksum delimiter, CRC, and line ending. No NUL byte is
 transmitted.
 
-The longest header is 23 bytes. With 160 payload bytes, `*`, four CRC digits,
+The longest header is 23 bytes. With 160 payload bytes, `,`, four CRC digits,
 and CRLF, the longest frame is **190 wire bytes**, or **191 bytes** in a
 NUL-terminated receive buffer. This fits a 200-byte frame buffer.
 
@@ -109,28 +167,29 @@ and discard invalid text.
 
 ## CRC
 
-Checksum every transmitted byte from the initial `#` through the last payload
-byte, excluding `*`, the hexadecimal CRC, and CRLF. Each fragment is independently
-checksummed, including its kind, length, ID, part, and count.
+Checksum every transmitted byte from the initial `#` through the comma after the
+payload, excluding the hexadecimal CRC and CRLF, exactly as in CSBee. Each fragment
+is independently checksummed, including its kind, length, ID, part, and count.
+The last comma separates the checksum; commas inside the payload remain unchanged.
 
 Use the existing CSBee `CalculateCRC16` algorithm: polynomial `0x1021`, initial
 value `0xFFFF`, no reflection, no final XOR, followed by a byte swap of the result.
-Format that swapped result as four uppercase hexadecimal digits.
+Format that swapped result with `%X`, one to four uppercase hexadecimal digits.
 
 ## Examples
 
 These examples include calculated CRCs. Printed `\r\n` represents actual CRLF.
 
 ```text
-#M10:33:MON:00:01/01:0,0,1,2,1,0,50,4000,0,0,100,0,100*BF08\r\n
+#M10:33:MON:00:01/01:0,0,1,2,1,0,50,4000,0,0,100,0,100,E6DB\r\n
 ```
 
 The following two fragments reconstruct `Antenna short detected`. Short fragments
 are valid; a sender normally fills fragments up to the payload limit.
 
 ```text
-#M10:14:WARN:01:01/02:Antenna short *3757\r\n
-#M10:8:WARN:01:02/02:detected*10C5\r\n
+#M10:14:WARN:01:01/02:Antenna short ,FCF8\r\n
+#M10:8:WARN:01:02/02:detected,77C\r\n
 ```
 
 ## Sender state and scheduling
