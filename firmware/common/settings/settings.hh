@@ -161,8 +161,8 @@ class SettingsManager {
         PositionSource source = kPositionSourceLowestAircraft;
         float latitude_deg = 0.0;      // Degrees, WGS84
         float longitude_deg = 0.0;     // Degrees, WGS84
-        int32_t gnss_altitude_ft = 0;  // Meters, WGS84
-        int32_t baro_altitude_ft = 0;  // Meters, AMSL
+        int32_t gnss_altitude_ft = 0;  // Feet, MSL
+        int32_t baro_altitude_ft = 0;  // Feet, pressure altitude
         float heading_deg = 0.0;       // Degrees from true north
         int32_t speed_kts = 0;         // Speed over ground in knots
         uint32_t icao_address =
