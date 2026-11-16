@@ -234,6 +234,67 @@ uint16_t GDL90Reporter::WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t 
     return WriteGDL90Message(to_buf, to_buf_num_bytes, message_buf, kMessageBufLenBytes);
 }
 
+static void WriteBigEndian16(uint8_t* buf, uint16_t value) {
+    buf[0] = value >> 8;
+    buf[1] = value & 0xFF;
+}
+
+static int32_t Clamp(int32_t value, int32_t min, int32_t max) { return value < min ? min : (value > max ? max : value); }
+
+uint16_t GDL90Reporter::WriteGDL90OwnshipGeoAltitudeMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
+                                                            const OwnshipGeoAltitudeData& data) {
+    uint8_t message_buf[5];
+    message_buf[0] = kGDL90MessageIDOwnshipGeometricAltitude;
+    WriteBigEndian16(message_buf + 1, static_cast<int16_t>(Clamp(lroundf(data.altitude_ft / 5.0f), INT16_MIN,
+                                                                 INT16_MAX)));
+    // 0x7FFF = VFOM unavailable, 0x7FFE = VFOM >= 32766 m.
+    uint16_t vfom = data.vfom_m < 0 ? 0x7FFF : Clamp(data.vfom_m, 0, 0x7FFE);
+    WriteBigEndian16(message_buf + 3, (data.vertical_warning << 15) | vfom);
+    return WriteGDL90Message(to_buf, to_buf_num_bytes, message_buf, sizeof(message_buf));
+}
+
+uint16_t GDL90Reporter::WriteForeFlightIDMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
+                                                 const ForeFlightIDData& data) {
+    uint8_t message_buf[39] = {};
+    message_buf[0] = kGDL90MessageIDForeFlight;
+    message_buf[1] = kForeFlightSubMessageIDID;
+    message_buf[2] = 1;  // Version, must be 1.
+    for (uint16_t i = 0; i < 8; i++) {
+        message_buf[3 + i] = (data.serial_number >> (56 - 8 * i)) & 0xFF;
+    }
+    memcpy(message_buf + 11, data.device_name, strnlen(data.device_name, 8));
+    memcpy(message_buf + 19, data.device_long_name, strnlen(data.device_long_name, 16));
+    message_buf[38] = data.geometric_altitude_is_msl | ((data.internet_policy & 0b11) << 1);
+    return WriteGDL90Message(to_buf, to_buf_num_bytes, message_buf, sizeof(message_buf));
+}
+
+// Tenths of a degree, or the invalid value when NaN or outside [-180, 180].
+static uint16_t EncodeAHRSAttitude(float deg) {
+    if (!(deg >= -180.0f && deg <= 180.0f)) return 0x7FFF;
+    return static_cast<uint16_t>(static_cast<int16_t>(lroundf(deg * 10.0f)));
+}
+
+static uint16_t EncodeAHRSAirspeed(int32_t kts) { return kts < 0 ? 0xFFFF : Clamp(kts, 0, 0xFFFE); }
+
+uint16_t GDL90Reporter::WriteForeFlightAHRSMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
+                                                   const ForeFlightAHRSData& data) {
+    uint8_t message_buf[12];
+    message_buf[0] = kGDL90MessageIDForeFlight;
+    message_buf[1] = kForeFlightSubMessageIDAHRS;
+    WriteBigEndian16(message_buf + 2, EncodeAHRSAttitude(data.roll_deg));
+    WriteBigEndian16(message_buf + 4, EncodeAHRSAttitude(data.pitch_deg));
+    uint16_t heading = 0xFFFF;
+    if (std::isfinite(data.heading_deg)) {
+        // Bit 15 flags magnetic heading, so the value is normalized to [0, 3600).
+        int32_t tenths = lroundf(data.heading_deg * 10.0f) % 3600;
+        heading = (data.heading_is_magnetic << 15) | (tenths < 0 ? tenths + 3600 : tenths);
+    }
+    WriteBigEndian16(message_buf + 6, heading);
+    WriteBigEndian16(message_buf + 8, EncodeAHRSAirspeed(data.indicated_airspeed_kts));
+    WriteBigEndian16(message_buf + 10, EncodeAHRSAirspeed(data.true_airspeed_kts));
+    return WriteGDL90Message(to_buf, to_buf_num_bytes, message_buf, sizeof(message_buf));
+}
+
 bool GDL90Reporter::IsValidOwnshipSource(SettingsManager::RxPosition::PositionSource source) {
     return source == SettingsManager::RxPosition::kPositionSourceGNSS ||
            source == SettingsManager::RxPosition::kPositionSourceAircraftMatchingICAO;

@@ -1,11 +1,14 @@
 #pragma once
 
+#include <cmath>
+
 #include "aircraft_dictionary.hh"
 #include "macros.hh"    // for MIN macro.
 #include "settings.hh"  // for SettingsManager::RxPosition.
 
 // GDL90 is implemented based on this spec:
 // https://www.faa.gov/sites/faa.gov/files/air_traffic/technology/adsb/archival/GDL90_Public_ICD_RevA.PDF
+// Message 0x65 follows the ForeFlight GDL90 Extended Specification.
 
 class GDL90Reporter {
    public:
@@ -27,7 +30,43 @@ class GDL90Reporter {
         kGDL90MessageIDOwnshipGeometricAltitude = 11,
         kGDL90MessageIDTrafficReport = 20,
         kGDL90MessageIDBasicReport = 30,
-        kGDL90MessageIDLongReport = 31
+        kGDL90MessageIDLongReport = 31,
+        kGDL90MessageIDForeFlight = 0x65
+    };
+
+    enum ForeFlightSubMessageID : uint8_t { kForeFlightSubMessageIDID = 0, kForeFlightSubMessageIDAHRS = 1 };
+
+    struct OwnshipGeoAltitudeData {
+        static constexpr int32_t kVFOMUnavailable = -1;
+
+        int32_t altitude_ft = 0;  // Encoded at 5 ft resolution, clamped to the 16-bit signed range.
+        bool vertical_warning = false;  // Position alarm present or fault detection unavailable.
+        int32_t vfom_m = kVFOMUnavailable;  // Vertical Figure of Merit, clamped to 32766 m.
+    };
+
+    struct ForeFlightIDData {
+        enum InternetPolicy : uint8_t {
+            kInternetPolicyUnrestricted = 0,
+            kInternetPolicyExpensive = 1,
+            kInternetPolicyDisallowed = 2
+        };
+
+        uint64_t serial_number = UINT64_MAX;  // All ones = invalid.
+        char device_name[9] = "";             // 8 UTF-8 bytes, zero padded.
+        char device_long_name[17] = "";       // 16 UTF-8 bytes, zero padded.
+        bool geometric_altitude_is_msl = false;
+        InternetPolicy internet_policy = kInternetPolicyUnrestricted;
+    };
+
+    // Sent at 5 Hz. ForeFlight rejects the whole message when an angle is out of range, so out of range angles are
+    // encoded as invalid instead.
+    struct ForeFlightAHRSData {
+        float roll_deg = NAN;     // [-180, 180], positive = right wing down. NaN = invalid.
+        float pitch_deg = NAN;    // [-180, 180], positive = nose up. NaN = invalid.
+        float heading_deg = NAN;  // Heading, never track. NaN = invalid.
+        bool heading_is_magnetic = false;
+        int32_t indicated_airspeed_kts = -1;  // Negative = invalid.
+        int32_t true_airspeed_kts = -1;       // Negative = invalid.
     };
 
     struct GDL90TargetReportData {
@@ -165,6 +204,11 @@ class GDL90Reporter {
      */
     uint16_t WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
                                            const GDL90TargetReportData& data, bool ownship = false);
+
+    uint16_t WriteGDL90OwnshipGeoAltitudeMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,
+                                                 const OwnshipGeoAltitudeData& data);
+    uint16_t WriteForeFlightIDMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const ForeFlightIDData& data);
+    uint16_t WriteForeFlightAHRSMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const ForeFlightAHRSData& data);
 
     // Ground speed above which the ownship is flagged as airborne in the ownship report's misc indicators.
     static constexpr int32_t kOwnshipAirborneSpeedKts = 30;

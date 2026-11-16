@@ -576,6 +576,109 @@ TEST(GDL90Utils, RemoteIDVerticalRateUnavailableWhenNotReceived) {
     vertical_rate_encoded = ((msg[15] & 0x0F) << 8) | msg[16];
     EXPECT_EQ(vertical_rate_encoded, 640 / 64);
 }
+// Strips flag bytes and escapes from a framed GDL90 message, verifies its CRC, and returns the payload length.
+static uint16_t UnframeGDL90Message(const uint8_t* framed, uint16_t framed_len, uint8_t* payload) {
+    EXPECT_EQ(framed[0], GDL90Reporter::kGDL90FlagByte);
+    EXPECT_EQ(framed[framed_len - 1], GDL90Reporter::kGDL90FlagByte);
+    uint16_t len = 0;
+    for (uint16_t i = 1; i < framed_len - 1; i++) {
+        payload[len++] = framed[i] == GDL90Reporter::kGDL90ControlEscapeChar ? framed[++i] ^ 0x20 : framed[i];
+    }
+    len -= 2;
+    uint16_t crc = gdl90.CalculateGDL90CRC16(payload, len);
+    EXPECT_EQ(payload[len], crc & 0xFF);
+    EXPECT_EQ(payload[len + 1], crc >> 8);
+    return len;
+}
+
+TEST(GDL90Utils, OwnshipGeoAltitudeMessage) {
+    uint8_t framed[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    uint8_t payload[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    struct {
+        int32_t altitude_ft;
+        bool vertical_warning;
+        int32_t vfom_m;
+        uint8_t expected[5];
+    } cases[] = {
+        {-1000, true, GDL90Reporter::OwnshipGeoAltitudeData::kVFOMUnavailable, {11, 0xFF, 0x38, 0xFF, 0xFF}},
+        {0, false, 40000, {11, 0x00, 0x00, 0x7F, 0xFE}},
+        {1000, false, 10, {11, 0x00, 0xC8, 0x00, 0x0A}},
+        {1002, true, 50, {11, 0x00, 0xC8, 0x80, 0x32}},
+        {1003, false, 32766, {11, 0x00, 0xC9, 0x7F, 0xFE}},
+        {200000, false, 0, {11, 0x7F, 0xFF, 0x00, 0x00}},
+    };
+    for (const auto& c : cases) {
+        GDL90Reporter::OwnshipGeoAltitudeData data;
+        data.altitude_ft = c.altitude_ft;
+        data.vertical_warning = c.vertical_warning;
+        data.vfom_m = c.vfom_m;
+        uint16_t framed_len = gdl90.WriteGDL90OwnshipGeoAltitudeMessage(framed, sizeof(framed), data);
+        ASSERT_EQ(UnframeGDL90Message(framed, framed_len, payload), sizeof(c.expected));
+        for (uint16_t i = 0; i < sizeof(c.expected); i++) {
+            EXPECT_EQ(payload[i], c.expected[i]) << "altitude_ft=" << c.altitude_ft << " byte " << i;
+        }
+    }
+}
+
+TEST(GDL90Utils, ForeFlightIDMessage) {
+    uint8_t framed[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    uint8_t payload[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    GDL90Reporter::ForeFlightIDData data;
+    uint16_t len = UnframeGDL90Message(framed, gdl90.WriteForeFlightIDMessage(framed, sizeof(framed), data), payload);
+    ASSERT_EQ(len, 39);
+    EXPECT_EQ(payload[0], 0x65);
+    EXPECT_EQ(payload[1], 0x00);
+    EXPECT_EQ(payload[2], 1);
+    for (uint16_t i = 3; i < 11; i++) EXPECT_EQ(payload[i], 0xFF);  // Invalid serial number.
+    for (uint16_t i = 11; i < 39; i++) EXPECT_EQ(payload[i], 0x00);
+
+    data.serial_number = 0x0102030405060708;
+    strcpy(data.device_name, "ADSBee");
+    strcpy(data.device_long_name, "ADSBee 1090U");
+    data.geometric_altitude_is_msl = true;
+    data.internet_policy = GDL90Reporter::ForeFlightIDData::kInternetPolicyDisallowed;
+    len = UnframeGDL90Message(framed, gdl90.WriteForeFlightIDMessage(framed, sizeof(framed), data), payload);
+    ASSERT_EQ(len, 39);
+    for (uint16_t i = 0; i < 8; i++) EXPECT_EQ(payload[3 + i], i + 1);
+    EXPECT_EQ(memcmp(payload + 11, "ADSBee\0\0", 8), 0);
+    EXPECT_EQ(memcmp(payload + 19, "ADSBee 1090U\0\0\0\0", 16), 0);
+    EXPECT_EQ(payload[35], 0x00);
+    EXPECT_EQ(payload[36], 0x00);
+    EXPECT_EQ(payload[37], 0x00);
+    EXPECT_EQ(payload[38], 0b101);  // MSL datum, internet disallowed.
+}
+
+TEST(GDL90Utils, ForeFlightAHRSMessage) {
+    uint8_t framed[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    uint8_t payload[GDL90Reporter::kGDL90MessageMaxLenBytes];
+    GDL90Reporter::ForeFlightAHRSData data;
+    uint16_t len = UnframeGDL90Message(framed, gdl90.WriteForeFlightAHRSMessage(framed, sizeof(framed), data), payload);
+    uint8_t all_invalid[] = {0x65, 0x01, 0x7F, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    ASSERT_EQ(len, sizeof(all_invalid));
+    EXPECT_EQ(memcmp(payload, all_invalid, len), 0);
+
+    data.roll_deg = -12.34f;
+    data.pitch_deg = 5.0f;
+    data.heading_deg = 359.96f;  // Rounds to 360.0, wraps to 0.
+    data.heading_is_magnetic = true;
+    data.indicated_airspeed_kts = 95;
+    data.true_airspeed_kts = 102;
+    len = UnframeGDL90Message(framed, gdl90.WriteForeFlightAHRSMessage(framed, sizeof(framed), data), payload);
+    uint8_t valid[] = {0x65, 0x01, 0xFF, 0x85, 0x00, 0x32, 0x80, 0x00, 0x00, 95, 0x00, 102};
+    ASSERT_EQ(len, sizeof(valid));
+    EXPECT_EQ(memcmp(payload, valid, len), 0);
+
+    data.roll_deg = 180.1f;  // ForeFlight rejects the whole message outside [-180, 180].
+    data.pitch_deg = -180.1f;
+    data.heading_deg = -90.0f;
+    data.heading_is_magnetic = false;
+    data.indicated_airspeed_kts = 70000;
+    len = UnframeGDL90Message(framed, gdl90.WriteForeFlightAHRSMessage(framed, sizeof(framed), data), payload);
+    uint8_t clamped[] = {0x65, 0x01, 0x7F, 0xFF, 0x7F, 0xFF, 0x0A, 0x8C, 0xFF, 0xFE, 0x00, 102};
+    ASSERT_EQ(len, sizeof(clamped));
+    EXPECT_EQ(memcmp(payload, clamped, len), 0);
+}
+
 TEST(GDL90Utils, UATTORTicksAre80Nanoseconds) {
     EXPECT_EQ(GDL90Reporter::MLAT48MHz64BitCountsToUATTORTicks(0), 0u);
     EXPECT_EQ(GDL90Reporter::MLAT48MHz64BitCountsToUATTORTicks(96), 25u);         // 2 us.
