@@ -62,6 +62,12 @@ struct M10Config {
     static constexpr uint32_t kCfgHwAntCfgRecover = 0x10a30035;
 };
 
+// Bytes a configuration value occupies, from the storage size in bits 30..28 of its key. 0 for an invalid key.
+constexpr uint8_t CfgValueSize(uint32_t key_id) {
+    constexpr uint8_t kSizes[8] = {0, 1, 1, 2, 4, 8, 0, 0};
+    return kSizes[(key_id >> 28) & 0x7];
+}
+
 // Append a UBX-CFG-VALSET cfgData entry (4-byte key, little-endian, followed by value_size value
 // bytes, little-endian) to buf at offset. Returns the new offset.
 inline uint16_t AppendCfgKeyValue(uint8_t* buf, uint16_t offset, uint32_t key_id, uint64_t value, uint8_t value_size_bytes) {
@@ -116,7 +122,7 @@ inline bool ReadCfgValue(const uint8_t* payload, uint16_t length, uint8_t layer,
 
 // The NMEA sentences and status messages both products use on UART1. diagnostics adds the receiver's INF messages.
 template <typename Write>
-constexpr void WriteMessageSelection(bool diagnostics, Write write) {
+void WriteMessageSelection(bool diagnostics, Write write) {
     using Cfg = M10Config;
     write(Cfg::kCfgMsgoutNmeaGgaUart1, 1);
     write(Cfg::kCfgMsgoutNmeaRmcUart1, 1);

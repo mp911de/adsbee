@@ -1,7 +1,7 @@
 target_sources(${PROJECT_NAME} PRIVATE
     "comms.cpp"
     "gnss_interface.cpp"
-    "m10_receiver.cpp"
+    ${ADSBEE_COMMON_DIR}/gnss/m10_receiver.cc
     ${ADSBEE_COMMON_DIR}/gnss/ubx_parser.cc
     ${ADSBEE_COMMON_DIR}/gnss/ublox_max_m10_diagnostics.cc
     ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc

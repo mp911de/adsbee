@@ -135,7 +135,7 @@ bool GNSSReceiver::ApplySettings(bool enabled, SettingsManager::GNSSReceiverType
     }
     if (uart_) gnss = this;
     const auto& settings = settings_manager.settings;
-    if (M10()) m10_.Configure(settings.gnss_antenna, settings.gnss_diagnostics, settings.gnss_baud_rate);
+    if (M10()) m10_.Configure({settings.gnss_antenna, settings.gnss_diagnostics}, settings.gnss_baud_rate);
     if (type_ == SettingsManager::kGNSSReceiverGeneric && !SwitchBaudrate(settings.gnss_baud_rate)) return false;
     return true;
 }
@@ -177,8 +177,14 @@ bool GNSSReceiver::Read() {
     return true;
 }
 
-bool GNSSReceiver::SendUbx(uint8_t cls, uint8_t id, const uint8_t* payload, size_t length) {
-    uint8_t frame[kMaxTxFrameSize];  // Fits one nonblocking UART1 write.
+bool GNSSReceiver::Service() {
+    if (!service_during_poll_() || !uart_) return false;
+    Read();
+    return true;
+}
+
+bool GNSSReceiver::SendUbx(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t length) {
+    uint8_t frame[kMaxTxFrameSize];
     if (!M10() || tx_active || length > sizeof(frame) - 8) return false;
     size_t size = 0;
     WriteUbxFrame(cls, id, payload, length, [&](uint8_t byte) { frame[size++] = byte; });

@@ -17,5 +17,4 @@ class NoneGNSSReceiver : public GNSSReceiver {
    protected:
     // Never called (Init() short-circuits before using these), but required to make the class concrete.
     uint32_t GetDefaultBaudrate() const override { return 9600; }
-    bool SendInitCommands() override { return false; }
 };

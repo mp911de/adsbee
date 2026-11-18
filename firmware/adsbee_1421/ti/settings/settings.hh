@@ -30,15 +30,6 @@ class SettingsManager : public GNSSSettingsOptions {
    public:
     // Serial Interface enum and string conversion array.
     enum SerialInterface : uint16_t { kConsole = 0, kNumSerialInterfaces };
-    static constexpr uint32_t kGNSSBaudRates[] = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
-
-    static constexpr bool IsGNSSBaudRate(uint32_t rate) {
-        for (uint32_t supported : kGNSSBaudRates) {
-            if (supported == rate) return true;
-        }
-        return false;
-    }
-
     // Maximum number of sinks that can be passed to CommsManager::UpdateReporting() in a single call.
     // The 1421 has no IP feeds, so this is just the serial interface count. Per-protocol sink arrays in
     // the shared comms_reporting.cpp are sized with this.

@@ -155,7 +155,9 @@ CPP_AT_CALLBACK(CommsManager::ATBaudRateCallback) {
             uint32_t baud_rate;
             CPP_AT_TRY_ARG2NUM(1, baud_rate);
             if (baud_rate == 0) CPP_AT_ERROR("Baud rate must be nonzero.");
-            if (iface == SettingsManager::kGNSSUART) gnss->SetModuleBaudrate(baud_rate);
+            if (iface == SettingsManager::kGNSSUART && !gnss->SetModuleBaudrate(baud_rate)) {
+                CPP_AT_ERROR("GNSS module did not take baud rate %d.", baud_rate);
+            }
             if (!SetBaudRate(iface, baud_rate)) {
                 CPP_AT_ERROR("Unable to set baud rate %d on interface %d.", baud_rate, iface);
             }

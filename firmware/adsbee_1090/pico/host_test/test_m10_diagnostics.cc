@@ -3,7 +3,6 @@
 #include <string>
 #include <vector>
 
-#include "airgrep_m10_readback.hh"
 #include "gtest/gtest.h"
 #include "ubx_test_utils.hh"
 
@@ -46,20 +45,6 @@ bool Decode(Capture& capture, uint8_t cls, uint8_t id, const std::string& payloa
 }
 
 }  // namespace
-
-TEST(M10Configuration, ReadbackRequiresEnabledMessagesAndIgnoresUnrelatedReplies) {
-    constexpr airgrep::GNSSMessageRate rates[] = {{0x209100bb, 1}, {0x209100c0, 0}};  // GGA, GSA
-    uint8_t reply[] = {1, 0, 0, 0, 0xbb, 0, 0x91, 0x20, 1};
-    uint32_t missing = 0;
-    EXPECT_EQ(airgrep::Readback::verified, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply), &missing));
-    EXPECT_EQ(2u, missing);
-    reply[8] = 0;
-    EXPECT_EQ(airgrep::Readback::mismatch, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
-    reply[4] = 0xc0;
-    EXPECT_EQ(airgrep::Readback::mismatch, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
-    reply[4] = 0xac;  // RMC belongs to a different request.
-    EXPECT_EQ(airgrep::Readback::unrelated, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
-}
 
 TEST(M10Diagnostics, ReadsBoundedVersionFieldsAndRejectsPartialExtensions) {
     Capture c;

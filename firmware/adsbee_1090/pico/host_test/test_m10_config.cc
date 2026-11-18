@@ -78,28 +78,129 @@ TEST(M10Config, SelectsPositionSentencesAndStatusMessages) {
     EXPECT_EQ(verbose, quiet);
 }
 
-TEST(AirgrepM10Profile, LoadsBatchesAndEnablesInfoMessagesForDiagnostics) {
-    airgrep::GNSSMessageRate batch[32];
-    EXPECT_EQ(airgrep::LoadMessages(0, airgrep::kBootstrapMessageCount, true, batch), airgrep::kBootstrapMessageCount);
-    EXPECT_EQ(batch[0].key, airgrep::kGNSSMessages[0].key);
-    EXPECT_EQ(batch[7].rate, airgrep::kGNSSMessages[7].rate);
-
-    const uint16_t tail = airgrep::kGNSSMessageCount - 2;  // INFMSG-UBX_UART1, INFMSG-NMEA_UART1
-    ASSERT_EQ(airgrep::LoadMessages(tail, 32, false, batch), 2);
-    EXPECT_EQ(batch[0].key, Cfg::kCfgInfmsgUbxUart1);
-    EXPECT_EQ(batch[0].rate, 0);
-    ASSERT_EQ(airgrep::LoadMessages(tail, 32, true, batch), 2);
-    EXPECT_EQ(batch[0].rate, 3);
-    EXPECT_EQ(batch[1].rate, 0);
-    EXPECT_EQ(airgrep::LoadMessages(airgrep::kGNSSMessageCount, 32, true, batch), 0);
+TEST(M10Config, ReadsValueSizeFromKey) {
+    EXPECT_EQ(CfgValueSize(Cfg::kCfgSignalSbas), 1);         // 0x1...: one bit, stored in a byte.
+    EXPECT_EQ(CfgValueSize(Cfg::kCfgMsgoutNmeaGgaUart1), 1);  // 0x2...: one byte.
+    EXPECT_EQ(CfgValueSize(Cfg::kCfgRateMeas), 2);            // 0x3...: two bytes.
+    EXPECT_EQ(CfgValueSize(Cfg::kCfgUart1Baudrate), 4);       // 0x4...: four bytes.
+    EXPECT_EQ(CfgValueSize(0x50000001), 8);                   // 0x5...: eight bytes.
+    EXPECT_EQ(CfgValueSize(0x00000001), 0);
+    EXPECT_EQ(CfgValueSize(0x60000001), 0);
 }
 
-TEST(AirgrepM10Profile, WritesRatesAndReadbackKeys) {
-    constexpr airgrep::GNSSMessageRate rates[] = {{0x209100bb, 1}, {0x209100c0, 0}};  // GGA, GSA
-    uint8_t payload[4 + 2 * 5];
-    uint16_t length = airgrep::WriteMessageRates(payload, Cfg::kCfgLayerRam | Cfg::kCfgLayerBbr, rates, 2);
-    EXPECT_EQ(Bytes(payload, payload + length),
-              (Bytes{0, 3, 0, 0, 0xbb, 0x00, 0x91, 0x20, 1, 0xc0, 0x00, 0x91, 0x20, 0}));
-    length = airgrep::WriteMessageKeys(payload, rates, 2);
-    EXPECT_EQ(Bytes(payload, payload + length), (Bytes{0, 0, 0, 0, 0xbb, 0x00, 0x91, 0x20, 0xc0, 0x00, 0x91, 0x20}));
+namespace {
+
+using Batch = M10ConfigBatch;
+
+// GGA rate 1, measurement period 1000 ms, GSA rate 0.
+void WriteThree(const M10Options&, Batch& batch) {
+    batch.Add(Cfg::kCfgMsgoutNmeaGgaUart1, 1);
+    batch.Add(Cfg::kCfgRateMeas, 1000);
+    batch.Add(Cfg::kCfgMsgoutNmeaGsaUart1, 0);
+}
+
+Batch::Readback Compare(const Bytes& reply, Batch::Window window = {0, 64, 256}) {
+    Batch batch = Batch::Compare(window, reply.data(), reply.size());
+    WriteThree({}, batch);
+    return batch.readback();
+}
+
+const Bytes kThreeReply{1, 0, 0, 0, 0xbb, 0x00, 0x91, 0x20, 1, 0x01, 0x00, 0x21, 0x30, 0xE8, 0x03,
+                        0xc0, 0x00, 0x91, 0x20, 0};
+
+}  // namespace
+
+TEST(M10ConfigBatch, BuildsRequestsForItsWindow) {
+    uint8_t payload[64];
+    Batch keys = Batch::Keys({0, 64, 64}, payload);
+    WriteThree({}, keys);
+    EXPECT_EQ(keys.count(), 3);
+    EXPECT_EQ(keys.total(), 3);
+    EXPECT_EQ(Bytes(payload, payload + keys.length()),
+              (Bytes{0, 0, 0, 0, 0xbb, 0x00, 0x91, 0x20, 0x01, 0x00, 0x21, 0x30, 0xc0, 0x00, 0x91, 0x20}));
+
+    Batch values = Batch::Values({0, 64, 64}, payload, Cfg::kCfgLayerRam | Cfg::kCfgLayerBbr);
+    WriteThree({}, values);
+    Bytes expected = kThreeReply;
+    expected[0] = 0;  // Version 0.
+    expected[1] = 3;  // RAM and battery-backed RAM.
+    EXPECT_EQ(Bytes(payload, payload + values.length()), expected);
+}
+
+TEST(M10ConfigBatch, LimitsWindowByItemsAndPayload) {
+    uint8_t payload[64];
+    Batch second = Batch::Keys({1, 1, 64}, payload);
+    WriteThree({}, second);
+    EXPECT_EQ(second.count(), 1);
+    EXPECT_EQ(second.total(), 3);
+    EXPECT_EQ(second.first_key(), Cfg::kCfgRateMeas);
+    EXPECT_EQ(Bytes(payload, payload + second.length()), (Bytes{0, 0, 0, 0, 0x01, 0x00, 0x21, 0x30}));
+
+    // Header 4, GGA 5 and the period 6 make 15 bytes as a VALSET; GSA does not fit into 19.
+    Batch tight = Batch::Values({0, 64, 19}, payload, Cfg::kCfgLayerRam);
+    WriteThree({}, tight);
+    EXPECT_EQ(tight.count(), 2);
+    EXPECT_EQ(tight.length(), 15);
+
+    Batch past_end = Batch::Count({3, 64, 64});
+    WriteThree({}, past_end);
+    EXPECT_EQ(past_end.count(), 0);
+    EXPECT_EQ(past_end.total(), 3);
+}
+
+TEST(M10ConfigBatch, ComparesReplyValues) {
+    EXPECT_EQ(Compare(kThreeReply), Batch::Readback::kMatch);
+    Bytes other_rate = kThreeReply;
+    other_rate[8] = 0;
+    EXPECT_EQ(Compare(other_rate), Batch::Readback::kMismatch);
+    Bytes other_period = kThreeReply;
+    other_period[14] = 0x04;
+    EXPECT_EQ(Compare(other_period), Batch::Readback::kMismatch);
+}
+
+TEST(M10ConfigBatch, IgnoresRepliesToOtherRequests) {
+    Bytes other_key = kThreeReply;
+    other_key[4] = 0xac;  // RMC is not in the batch.
+    EXPECT_EQ(Compare(other_key), Batch::Readback::kUnrelated);
+    Bytes other_layer = kThreeReply;
+    other_layer[1] = Cfg::kCfgGetLayerBbr;
+    EXPECT_EQ(Compare(other_layer), Batch::Readback::kUnrelated);
+    Bytes request = kThreeReply;
+    request[0] = 0;
+    EXPECT_EQ(Compare(request), Batch::Readback::kUnrelated);
+    const Bytes cut(kThreeReply.begin(), kThreeReply.end() - 1);
+    EXPECT_EQ(Compare(cut), Batch::Readback::kUnrelated);
+    // A reply holds exactly the keys of its request.
+    EXPECT_EQ(Compare(kThreeReply, {0, 1, 256}), Batch::Readback::kUnrelated);
+    const Bytes without_gsa(kThreeReply.begin(), kThreeReply.begin() + 15);
+    EXPECT_EQ(Compare(without_gsa), Batch::Readback::kUnrelated);
+}
+
+TEST(AirgrepM10Profile, HoldsMessageSelectionThenReceiverSettings) {
+    constexpr uint16_t kMessages = sizeof(airgrep::kGNSSMessages) / sizeof(airgrep::kGNSSMessages[0]);
+    Batch passive = Batch::Count({0, 64, 256});
+    airgrep::kM10Profile.write({GNSSSettingsOptions::kGNSSAntennaPassive, false}, passive);
+    EXPECT_EQ(passive.total(), kMessages + 8);
+    EXPECT_EQ(passive.first_key(), airgrep::kGNSSMessages[0].key);
+
+    Batch supervised = Batch::Count({0, 64, 256});
+    airgrep::kM10Profile.write({GNSSSettingsOptions::kGNSSAntennaActiveSupervised, false}, supervised);
+    EXPECT_EQ(supervised.total(), kMessages + 10);  // Adds the two supervisor pins.
+
+    uint8_t payload[16];
+    Batch settings = Batch::Values({kMessages, 1, sizeof(payload)}, payload, Cfg::kCfgLayerRam);
+    airgrep::kM10Profile.write({}, settings);
+    EXPECT_EQ(Bytes(payload, payload + settings.length()), (Bytes{0, 1, 0, 0, 0x01, 0x00, 0x21, 0x30, 0xE8, 0x03}));
+}
+
+TEST(AirgrepM10Profile, DiagnosticsEnableInfoMessages) {
+    constexpr uint16_t kMessages = sizeof(airgrep::kGNSSMessages) / sizeof(airgrep::kGNSSMessages[0]);
+    ASSERT_EQ(airgrep::kGNSSMessages[kMessages - 2].key, Cfg::kCfgInfmsgUbxUart1);
+    for (bool diagnostics : {false, true}) {
+        uint8_t payload[16];
+        Batch info = Batch::Values({static_cast<uint16_t>(kMessages - 2), 1, sizeof(payload)}, payload, Cfg::kCfgLayerRam);
+        airgrep::kM10Profile.write({GNSSSettingsOptions::kGNSSAntennaUnknown, diagnostics}, info);
+        EXPECT_EQ(Bytes(payload, payload + info.length()),
+                  (Bytes{0, 1, 0, 0, 0x02, 0x00, 0x92, 0x20, static_cast<uint8_t>(diagnostics ? 3 : 0)}));
+    }
 }

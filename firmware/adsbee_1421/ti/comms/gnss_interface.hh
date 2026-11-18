@@ -3,11 +3,14 @@
 #include <ti/drivers/UART2.h>
 
 #include "gnss_navigation.hh"
+#include "m10_active_profile.hh"
 #include "m10_receiver.hh"
+#include "settings.hh"
 
-class GNSSReceiver {
+class GNSSReceiver : private M10Port {
    public:
-    explicit GNSSReceiver(bool (*service_during_poll)()) : service_during_poll_(service_during_poll), m10_(*this) {}
+    explicit GNSSReceiver(bool (*service_during_poll)())
+        : service_during_poll_(service_during_poll), m10_(*this, kM10ActiveProfile, kMaxTxFrameSize - 8) {}
     bool Configure(bool enabled, SettingsManager::GNSSReceiverType type);
     bool SetBaudrate(uint32_t baud);
     void Update();
@@ -23,15 +26,16 @@ class GNSSReceiver {
     bool GetFixUTCUnixMs(uint64_t& utc_ms) const;
 
    private:
-    friend class M10Receiver;
-    static constexpr size_t kMaxTxFrameSize = 144;
+    static constexpr size_t kMaxTxFrameSize = 144;  // Fits one nonblocking UART1 write. A UBX frame adds 8 bytes.
     bool Open(uint32_t baud);
     bool OpenUART(uint32_t baud);
-    bool SwitchBaudrate(uint32_t baud);
-    bool Transmitting() const;
+    bool SwitchBaudrate(uint32_t baud) override;
+    bool Transmitting() const override;
+    uint32_t baudrate() const override { return baud_; }
+    bool Service() override;
     bool ApplySettings(bool enabled, SettingsManager::GNSSReceiverType type);
     bool Read();
-    bool SendUbx(uint8_t cls, uint8_t id, const uint8_t* payload = nullptr, size_t length = 0);
+    bool SendUbx(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t length) override;
     void NotifyFix();
     bool (*service_during_poll_)();
     UART2_Handle uart_ = nullptr;

@@ -20,6 +20,7 @@ else()
         ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc
         ${ADSBEE_COMMON_DIR}/gnss/ubx_parser.cc
         ${ADSBEE_COMMON_DIR}/gnss/ublox_max_m10_diagnostics.cc
+        ${ADSBEE_COMMON_DIR}/gnss/m10_receiver.cc
         gnss/ublox_max_m10_telemetry.cc
         gnss/airgrep_gnss_frame.cc
         gnss/gnss_receiver.cc

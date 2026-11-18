@@ -131,7 +131,7 @@ void CommsManager::UpdateGNSSReport() {
     last_gnss_report_timestamp_ms_ = now_ms;
     AirgrepGnssFrame report{.fix = gnss->fix(), .fix_valid = gnss->HasValidFix()};
     report.epoch_valid = gnss->GetUTCUnixMs(report.epoch_ms);
-    if (UbloxMAXM10* m10 = gnss->M10()) {
+    if (M10Receiver* m10 = gnss->M10()) {
         if (m10->rf().IsFresh(now_ms)) report.rf = &m10->rf().value;
         if (m10->satellites().IsFresh(now_ms)) report.satellites = &m10->satellites().value;
         if (m10->sbas().IsFresh(now_ms)) report.sbas = &m10->sbas().value;

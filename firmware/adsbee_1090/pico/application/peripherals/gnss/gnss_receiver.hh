@@ -8,8 +8,8 @@
 #include "pico/stdlib.h"  // For gpio_* and tight_loop_contents() used by subclasses/impl.
 #include "settings.hh"
 
+class M10Receiver;
 class M10Telemetry;
-class UbloxMAXM10;
 
 /**
  * Abstract base class for a GNSS receiver that emits NMEA over UART.
@@ -30,12 +30,6 @@ class GNSSReceiver {
     static constexpr uint32_t kVendorPowerOnDelayMs = 1000;
     static constexpr uint32_t kGenericPrePowerDelayMs = 100;
     static constexpr uint32_t kFixNotifyMinIntervalMs = 1000;
-    // If the vendor-specific init/liveness probe fails (e.g. the module is still warming up), retry it periodically from Update() rather than leaving
-    // healthy_ permanently false until the next reboot. Bounded by kMaxUnhealthyRetries so a
-    // genuinely absent module doesn't stall the main loop indefinitely -- each retry costs up to
-    // SendInitCommands()'s own worst-case blocking time (see UbloxMAXM10::ConnectAtConfiguredBaudrate()).
-    static constexpr uint32_t kUnhealthyRetryIntervalMs = 5000;
-    static constexpr uint32_t kMaxUnhealthyRetries = 5;
     static constexpr uint16_t kRxBufferSize = 2048;
     static constexpr uint16_t kRxBufferMask = kRxBufferSize - 1;
     static_assert((kRxBufferSize & kRxBufferMask) == 0, "GNSS RX buffer size must be a power of two.");
@@ -107,7 +101,7 @@ class GNSSReceiver {
     bool GetFixUTCUnixMs(uint64_t& utc_unix_ms) const { return GetUTCUnixMs(utc_unix_ms); }
 
     /**
-     * @retval True if the module responded during Init() (i.e. it is present and configured).
+     * @retval True while the module is present and configured.
      */
     bool IsHealthy() const { return healthy_; }
 
@@ -116,10 +110,11 @@ class GNSSReceiver {
 
     virtual M10Telemetry* Telemetry() { return nullptr; }
     // The MAX-M10 driver when one is running, for module diagnostics. Other receivers return nullptr.
-    virtual UbloxMAXM10* M10() { return nullptr; }
-    // Move the module to a new UART rate. The caller then switches the host UART. Receivers without a rate
+    virtual M10Receiver* M10() { return nullptr; }
+    // Move the module to a new UART rate before the caller switches the host UART. Receivers without a rate
     // command keep their rate.
-    virtual void SetModuleBaudrate(uint32_t baudrate) {}
+    // @retval False if the module did not take the rate.
+    virtual bool SetModuleBaudrate(uint32_t baudrate) { return true; }
 
     // Call on core 0 before core 1 starts: core 1's interrupts run the shared handler chain.
     static void InstallPPSHandler(uint pin);
@@ -134,19 +129,19 @@ class GNSSReceiver {
     virtual uint32_t GetDefaultBaudrate() const = 0;
 
     /**
-     * Send receiver-specific configuration (e.g. UBX-CFG-VALSET for u-blox). Called by Init()
-     * after the boot delay.
-     * @retval True if the module acknowledged configuration (also used as the liveness check).
+     * Begin receiver-specific configuration. Called when the module accepts commands: after the power-on
+     * delay and after a UART handover. Must not block.
      */
-    virtual bool SendInitCommands() = 0;
+    virtual void StartModule() {}
 
     /**
-     * Re-assert only the runtime message-output configuration (the sentences we consume), without
-     * the full init/config pass. Called by ResumeAfterUartHandover() after an ESP32 flash so the
-     * module keeps emitting the NMEA we need, cheaply and without disturbing stored config.
-     * Default no-op; receivers that need it (e.g. UbloxMAXM10) override.
+     * Advance receiver-specific configuration. Called on every Update() after the received bytes were parsed.
+     * @retval True while the module is present and configured.
      */
-    virtual void ResendRuntimeConfig() {}
+    virtual bool UpdateModule() { return healthy_; }
+
+    /** Parse everything the UART has received. */
+    void IngestRx(uint32_t now_ms);
 
     /**
      * Route the GNSS UART pins (GPIO 0/1) to uart0 and (re)initialize the peripheral to the
@@ -193,10 +188,6 @@ class GNSSReceiver {
     uint32_t uart_ready_timestamp_ms_ = 0;
     bool initializing_ = false;
     uint32_t power_on_timestamp_ms_ = 0;
-    // Timestamp of the last SendInitCommands() attempt (initial or retry) and how many retries
-    // (beyond the initial attempt) have been made since Init(). Reset in Init().
-    uint32_t last_init_attempt_timestamp_ms_ = 0;
-    uint32_t unhealthy_retry_count_ = 0;
     bool notify_observed_valid_ = false;
     bool notify_last_emitted_valid_ = false;
     bool notify_pending_ = false;

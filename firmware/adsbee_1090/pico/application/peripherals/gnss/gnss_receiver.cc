@@ -69,8 +69,6 @@ bool GNSSReceiver::Init() {
     // applies the non-blocking power-on delay only to vendor-specific initialization commands.
     healthy_ = false;
     power_on_timestamp_ms_ = get_time_since_boot_ms();
-    last_init_attempt_timestamp_ms_ = power_on_timestamp_ms_;
-    unhealthy_retry_count_ = 0;
     initializing_ = true;
     notify_observed_valid_ = false;
     notify_last_emitted_valid_ = false;
@@ -83,92 +81,7 @@ bool GNSSReceiver::Init() {
     return true;
 }
 
-bool GNSSReceiver::Update() {
-    if (suspended_) return true;
-
-    if (power_enable_pending_) {
-        uint32_t now_ms = get_time_since_boot_ms();
-        if (now_ms - uart_ready_timestamp_ms_ < kGenericPrePowerDelayMs) return true;
-        power_enable_pending_ = false;
-        SetEnable(true);
-    }
-
-    // Continue parsing standard NMEA while active even if an optional vendor-specific probe or
-    // configuration step failed. A valid NMEA fix is still usable in that situation.
-    if (!active_) return true;
-
-    uint32_t now_ms = get_time_since_boot_ms();
-    if (auto* telemetry = Telemetry()) telemetry->SetEnabled(settings_manager.settings.gnss_diagnostics);
-    // SendInitCommands() may parse NMEA received during its probe, so establish the timestamp
-    // before initialization as well as before the normal UART drain below.
-    parser_.SetTimestampMs(now_ms);
-    if (initializing_) {
-        uint32_t power_on_delay_ms =
-            module_type_ == BSP::kGNSSModuleGeneric ? 0 : kVendorPowerOnDelayMs;
-        if (now_ms - power_on_timestamp_ms_ < power_on_delay_ms) return true;
-        initializing_ = false;
-        if (module_type_ == BSP::kGNSSModuleUbloxMAXM10) {
-            gpio_set_function(config_.uart_tx_pin, GPIO_FUNC_UART);
-        }
-
-        // This is the first communication with the receiver after power was asserted.
-        switch (module_type_) {
-            case BSP::kGNSSModuleGeneric:
-                // Passively probe the generic receiver for standard NMEA-0183 messages.
-                healthy_ = SendInitCommands();
-                break;
-            case BSP::kGNSSModuleUbloxMAXM10:
-                // Configure the u-blox module and enable the NMEA messages used by the parser.
-                // SendInitCommands() also performs the bounded UBX liveness check.
-                healthy_ = SendInitCommands();
-                break;
-            case BSP::kGNSSModuleNone:
-            default:
-                // NONE returned before touching hardware. Keep this defensive branch for invalid or
-                // newly-added types that do not yet have an explicit initialization policy.
-                healthy_ = false;
-                active_ = false;
-                return false;
-        }
-
-        if (!healthy_) {
-            CONSOLE_WARNING("GNSSReceiver::Update",
-                            "GNSS module did not respond; continuing to listen for NMEA messages.");
-        } else {
-            CONSOLE_INFO("GNSSReceiver::Update", "GNSS module configured at %lu baud.",
-                         static_cast<unsigned long>(GetDefaultBaudrate()));
-        }
-
-        // Initialization/probing can consume measurable time. Refresh the clock used for fix
-        // freshness and notification rate limiting before continuing this update.
-        now_ms = get_time_since_boot_ms();
-        last_init_attempt_timestamp_ms_ = now_ms;
-    } else if (active_ && !healthy_ && unhealthy_retry_count_ < kMaxUnhealthyRetries &&
-               now_ms - last_init_attempt_timestamp_ms_ >= kUnhealthyRetryIntervalMs) {
-        // The initial probe (in the initializing_ block above) only gets one early window right
-        // after power-on. A module that's still finishing its cold start past that window would
-        // otherwise be permanently marked unhealthy for the rest of this boot even once it starts
-        // answering. Retry periodically, bounded by kMaxUnhealthyRetries, so it can still be
-        // detected and configured (e.g. NMEA sentence selection, AssistNow) once it wakes up.
-        unhealthy_retry_count_++;
-        healthy_ = SendInitCommands();
-        if (healthy_) {
-            CONSOLE_INFO("GNSSReceiver::Update",
-                         "GNSS module responded on retry %lu/%lu; configured at %lu baud.",
-                         static_cast<unsigned long>(unhealthy_retry_count_),
-                         static_cast<unsigned long>(kMaxUnhealthyRetries),
-                         static_cast<unsigned long>(GetDefaultBaudrate()));
-        } else {
-            CONSOLE_WARNING("GNSSReceiver::Update", "GNSS module still not responding (retry %lu/%lu).",
-                            static_cast<unsigned long>(unhealthy_retry_count_),
-                            static_cast<unsigned long>(kMaxUnhealthyRetries));
-        }
-
-        // SendInitCommands() may parse NMEA/consume measurable time; refresh the clock as above.
-        now_ms = get_time_since_boot_ms();
-        last_init_attempt_timestamp_ms_ = now_ms;
-    }
-
+void GNSSReceiver::IngestRx(uint32_t now_ms) {
     // Stamp the parser with the current time so applied fixes carry a freshness timestamp.
     parser_.SetTimestampMs(now_ms);
 
@@ -192,6 +105,34 @@ bool GNSSReceiver::Update() {
             if (result == NMEAParser::kSentenceChecksumFail) debug_cksum_fail_count_++;
         }
     }
+}
+
+bool GNSSReceiver::Update() {
+    if (suspended_) return true;
+
+    if (power_enable_pending_) {
+        uint32_t now_ms = get_time_since_boot_ms();
+        if (now_ms - uart_ready_timestamp_ms_ < kGenericPrePowerDelayMs) return true;
+        power_enable_pending_ = false;
+        SetEnable(true);
+    }
+
+    // Continue parsing standard NMEA while active even if an optional vendor-specific probe or
+    // configuration step failed. A valid NMEA fix is still usable in that situation.
+    if (!active_) return true;
+
+    uint32_t now_ms = get_time_since_boot_ms();
+    if (auto* telemetry = Telemetry()) telemetry->SetEnabled(settings_manager.settings.gnss_diagnostics);
+    if (initializing_) {
+        if (now_ms - power_on_timestamp_ms_ < kVendorPowerOnDelayMs) return true;
+        initializing_ = false;
+        // This is the first communication with the receiver after power was asserted.
+        gpio_set_function(config_.uart_tx_pin, GPIO_FUNC_UART);
+        StartModule();
+    }
+
+    IngestRx(now_ms);
+    healthy_ = UpdateModule();
 
     // TEMPORARY periodic debug print (remove once root cause found). Logged at INFO level, so it only shows with
     // AT+LOG_LEVEL=INFO.
@@ -280,7 +221,7 @@ void GNSSReceiver::ResumeAfterUartHandover() {
     ClaimUart();
     EnableRxInterrupt();
     // A running module needs only runtime configuration. Startup retains its original delay.
-    if (!initializing_) ResendRuntimeConfig();
+    if (!initializing_) StartModule();
     suspended_ = false;
 }
 
@@ -298,8 +239,6 @@ void GNSSReceiver::SetEnable(bool enabled) {
             EnableRxInterrupt();
             EnablePPSInterrupt();
             power_on_timestamp_ms_ = get_time_since_boot_ms();
-            last_init_attempt_timestamp_ms_ = power_on_timestamp_ms_;
-            unhealthy_retry_count_ = 0;
         }
     }
     if (!enabled) {

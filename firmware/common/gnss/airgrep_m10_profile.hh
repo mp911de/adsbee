@@ -1,8 +1,7 @@
 #pragma once
 
 #include <cstdint>
-#include "../settings/gnss_settings_options.hh"
-#include "ublox_max_m10_config.hh"
+#include "m10_profile.hh"
 
 namespace airgrep {
 
@@ -22,24 +21,21 @@ void WriteReceiverSettings(GNSSSettingsOptions::GNSSAntennaMode mode, Write writ
     using Options = GNSSSettingsOptions;
     const bool supervised = mode == Options::kGNSSAntennaActiveSupervised;
     const uint8_t antenna = Cfg::AntennaSetting(mode);
-    write(Cfg::kCfgRateMeas, 1000, 2);
-    write(Cfg::kCfgRateNav, 1, 2);
-    write(Cfg::kCfgSignalSbas, 1, 1);
-    write(Cfg::kCfgI2cEnabled, 0, 1);
-    write(Cfg::kCfgItfmAntSetting, antenna, 1);
-    write(Cfg::kCfgHwAntCfgVoltCtrl, supervised, 1);
-    write(Cfg::kCfgHwAntCfgShortDet, supervised, 1);
-    write(Cfg::kCfgHwAntCfgOpenDet, supervised, 1);
+    write(Cfg::kCfgRateMeas, 1000);
+    write(Cfg::kCfgRateNav, 1);
+    write(Cfg::kCfgSignalSbas, 1);
+    write(Cfg::kCfgI2cEnabled, 0);
+    write(Cfg::kCfgItfmAntSetting, antenna);
+    write(Cfg::kCfgHwAntCfgVoltCtrl, supervised);
+    write(Cfg::kCfgHwAntCfgShortDet, supervised);
+    write(Cfg::kCfgHwAntCfgOpenDet, supervised);
     if (supervised) {
-        write(Cfg::kCfgHwAntSupShortPin, AIRGREP_REV_A_ANT_SHORT_PIN, 1);
-        write(Cfg::kCfgHwAntSupOpenPin, AIRGREP_REV_A_ANT_OPEN_PIN, 1);
+        write(Cfg::kCfgHwAntSupShortPin, AIRGREP_REV_A_ANT_SHORT_PIN);
+        write(Cfg::kCfgHwAntSupOpenPin, AIRGREP_REV_A_ANT_OPEN_PIN);
     }
 }
 
-// The first eight entries quiet UART1 before the remaining message rates are applied.
-inline constexpr uint8_t kBootstrapMessageCount = 8;
-
-// UART1 output selection for M10 SPG 5.10. Rejected disabled outputs are optional.
+// UART1 output selection for M10 SPG 5.10. An output the receiver rejects is skipped.
 inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x209100bb, 1},  // NMEA_ID_GGA
     {0x209100ac, 1},  // NMEA_ID_RMC
@@ -107,34 +103,16 @@ inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x20920002, 0},  // INFMSG-UBX_UART1
     {0x20920007, 0},  // INFMSG-NMEA_UART1
 };
-inline constexpr uint16_t kGNSSMessageCount = sizeof(kGNSSMessages) / sizeof(kGNSSMessages[0]);
 
-// Copy up to limit entries of kGNSSMessages from offset into out. diagnostics adds the receiver's INF messages.
-// @retval Number of entries copied.
-inline uint8_t LoadMessages(uint16_t offset, uint8_t limit, bool diagnostics, GNSSMessageRate* out) {
-    uint8_t count = 0;
-    for (; count < limit && offset + count < kGNSSMessageCount; ++count) {
-        out[count] = kGNSSMessages[offset + count];
-        if (out[count].key == M10Config::kCfgInfmsgUbxUart1 && diagnostics)
-            out[count].rate = M10Config::kInfmsgErrorAndWarning;
+// Message selection first, so the first batch quiets UART1, then the receiver settings.
+inline void WriteProfile(const M10Options& options, M10ConfigBatch& batch) {
+    for (const GNSSMessageRate& message : kGNSSMessages) {
+        const bool info = message.key == M10Config::kCfgInfmsgUbxUart1 && options.diagnostics;
+        batch.Add(message.key, info ? M10Config::kInfmsgErrorAndWarning : message.rate);
     }
-    return count;
+    WriteReceiverSettings(options.antenna, [&](uint32_t key, uint16_t value) { batch.Add(key, value); });
 }
 
-// UBX-CFG-VALSET payload that sets the rates of messages in layers. Needs 4 + 5 * count bytes.
-// @retval Payload length.
-inline uint16_t WriteMessageRates(uint8_t* payload, uint8_t layers, const GNSSMessageRate* messages, uint8_t count) {
-    uint16_t length = BeginCfgValset(payload, layers);
-    for (uint8_t i = 0; i < count; ++i) length = AppendCfgKeyValue(payload, length, messages[i].key, messages[i].rate, 1);
-    return length;
-}
-
-// UBX-CFG-VALGET request for the RAM rates of messages. Needs 4 + 4 * count bytes.
-// @retval Payload length.
-inline uint16_t WriteMessageKeys(uint8_t* payload, const GNSSMessageRate* messages, uint8_t count) {
-    uint16_t length = BeginCfgValget(payload, M10Config::kCfgGetLayerRam);
-    for (uint8_t i = 0; i < count; ++i) length = AppendCfgKeyValue(payload, length, messages[i].key, 0, 0);
-    return length;
-}
+inline constexpr M10Profile kM10Profile{WriteProfile, M10Config::kCfgLayerRam | M10Config::kCfgLayerBbr};
 
 }  // namespace airgrep

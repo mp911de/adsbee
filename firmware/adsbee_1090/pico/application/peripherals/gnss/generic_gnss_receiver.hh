@@ -16,5 +16,4 @@ class GenericGNSSReceiver : public GNSSReceiver {
     uint32_t GetDefaultBaudrate() const override {
         return settings_manager.settings.baud_rates[SettingsManager::kGNSSUART];
     }
-    bool SendInitCommands() override { return true; }
 };
