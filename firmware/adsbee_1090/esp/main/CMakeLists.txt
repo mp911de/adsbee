@@ -36,6 +36,8 @@ idf_component_register(
         "remote_id"
         "server"
         "target_test"
+    EXCLUDE_SRCS
+        "${COMMON_DIR}/comms/gnss_at.cpp"
     INCLUDE_DIRS
         "."
         "${COMMON_DIR}"

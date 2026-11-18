@@ -6,6 +6,7 @@
 #include <functional>  // for strtoull
 
 #include "crc.hh"
+#include "gnss_settings_options.hh"
 #include "macros.hh"
 #include "altitude_filter.hh"
 #include "ipv4_config.hh"
@@ -22,7 +23,7 @@
 static constexpr uint32_t kSettingsVersion = 20;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
-class SettingsManager {
+class SettingsManager : public GNSSSettingsOptions {
    public:
     // Serial Interface enum and string conversion array.
     enum SerialInterface : uint16_t { kConsole = 0, kCommsUART, kGNSSUART, kNumSerialInterfaces };
@@ -102,21 +103,6 @@ class SettingsManager {
         kEnableStateExternal = -1,  // Enable GPIO pin is high impedance.
         kEnableStateDisabled = 0,
         kEnableStateEnabled = 1
-    };
-
-    enum GNSSReceiverType : uint8_t {
-        kGNSSReceiverNone = 0,
-        kGNSSReceiverGeneric,
-        kGNSSReceiverUBXMIA,
-    };
-
-    // Antenna mode: what the user declared about the GNSS antenna. Supervised adds the M10 antenna supervisor.
-    enum GNSSAntennaMode : uint8_t {
-        kGNSSAntennaUnknown = 0,
-        kGNSSAntennaPassive,
-        kGNSSAntennaActive,
-        kGNSSAntennaActiveSupervised,
-        kNumGNSSAntennaModes
     };
 
     // IP versions used on the Ethernet and WiFi station interfaces. The WiFi access point is always IPv4.
@@ -790,30 +776,6 @@ class SettingsManager {
             }
         }
         return false;
-    }
-
-    /**
-     * Helper function for converting a GNSSReceiverType to its AT command value string. Returns "NONE" for
-     * out-of-range values (e.g. from a corrupted settings blob) so the AT dump stays replayable.
-     * @param[in] type GNSSReceiverType to convert to a string.
-     * @retval String representation of the GNSSReceiverType, as it would be used in an AT command.
-     */
-    static inline const char* GNSSReceiverTypeToStr(GNSSReceiverType type) {
-        switch (type) {
-            case kGNSSReceiverGeneric:
-                return "GENERIC";
-            case kGNSSReceiverUBXMIA:
-                return "UBX_MIA";
-            case kGNSSReceiverNone:
-            default:
-                return "NONE";
-        }
-    }
-
-    static constexpr const char* kGNSSAntennaModeStrs[kNumGNSSAntennaModes] = {"UNKNOWN", "PASSIVE", "ACTIVE",
-                                                                                "ACTIVE_SUPERVISED"};
-    static inline const char* GNSSAntennaModeToStr(GNSSAntennaMode mode) {
-        return mode < kNumGNSSAntennaModes ? kGNSSAntennaModeStrs[mode] : kGNSSAntennaModeStrs[kGNSSAntennaUnknown];
     }
 
     /**

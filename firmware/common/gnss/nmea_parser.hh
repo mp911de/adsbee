@@ -39,6 +39,7 @@ class NMEAParser {
     // Decoded GNSS fix, merged across GGA (altitude / satellites / fix quality) and RMC
     // (position / speed / course / validity).
     struct GNSSFix {
+        static constexpr uint32_t kStaleTimeoutMs = 5000;
         bool valid = false;             // True if the last position-bearing sentence reported a fix.
         float latitude_deg = 0.0f;      // WGS84 degrees, north positive.
         float longitude_deg = 0.0f;     // WGS84 degrees, east positive.
@@ -48,7 +49,8 @@ class NMEAParser {
         uint8_t num_satellites = 0;     // Satellites used in the GGA fix.
         uint8_t fix_quality = 0;        // GGA fix quality (0 = no fix, 1 = GPS, 2 = DGPS, ...).
         float hdop = -1.0f;             // GGA horizontal dilution of precision, -1 when not reported.
-        uint32_t last_update_timestamp_ms = 0;  // Caller-supplied timestamp of last applied fix.
+        uint64_t last_update_timestamp_ms = 0;  // Monotonic uptime of the last applied fix.
+        bool IsFresh(uint64_t now_ms) const { return valid && now_ms - last_update_timestamp_ms < kStaleTimeoutMs; }
     };
 
     static constexpr uint32_t kUTCStaleTimeoutMs = 5000;
@@ -56,7 +58,7 @@ class NMEAParser {
     NMEAParser() = default;
 
     // Extrapolate a recent dated RMC sample, independently of GGA time and position freshness.
-    bool GetUTCUnixMs(uint32_t now_ms, uint64_t& utc_unix_ms) const;
+    bool GetUTCUnixMs(uint64_t now_ms, uint64_t& utc_unix_ms) const;
     void InvalidateUTC() { utc_valid_ = false; }
     // UTC of the last RMC, without extrapolation.
     bool GetLastUTCUnixMs(uint64_t& utc_unix_ms) const {
@@ -80,7 +82,7 @@ class NMEAParser {
      * Set the timestamp (ms) recorded on the fix when the next sentence is applied. The parser is
      * platform-agnostic, so the owning driver supplies the clock.
      */
-    void SetTimestampMs(uint32_t timestamp_ms) { timestamp_ms_ = timestamp_ms; }
+    void SetTimestampMs(uint64_t timestamp_ms) { timestamp_ms_ = timestamp_ms; }
 
    private:
     // Parse the currently buffered line (line_buf_ / line_len_, '$' stripped, checksum validated)
@@ -100,8 +102,8 @@ class NMEAParser {
     uint8_t checksum_char_count_ = 0;
 
     GNSSFix fix_;
-    uint32_t timestamp_ms_ = 0;
+    uint64_t timestamp_ms_ = 0;
     bool utc_valid_ = false;
     uint64_t utc_unix_ms_ = 0;
-    uint32_t utc_update_timestamp_ms_ = 0;
+    uint64_t utc_update_timestamp_ms_ = 0;
 };

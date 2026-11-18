@@ -17,9 +17,9 @@ else()
         eeprom.cc
         # si4362/si4362.cc
         cc1312/cc1312.cc
-        gnss/nmea_parser.cc
-        gnss/ubx_parser.cc
-        gnss/ublox_max_m10_diagnostics.cc
+        ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc
+        ${ADSBEE_COMMON_DIR}/gnss/ubx_parser.cc
+        ${ADSBEE_COMMON_DIR}/gnss/ublox_max_m10_diagnostics.cc
         gnss/ublox_max_m10_telemetry.cc
         gnss/airgrep_gnss_frame.cc
         gnss/gnss_receiver.cc
@@ -31,5 +31,6 @@ else()
         # si4362
         cc1312
         gnss
+        ${ADSBEE_COMMON_DIR}/gnss
     )
 endif()

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include "../settings/gnss_settings_options.hh"
+#include "ublox_max_m10_config.hh"
 
 namespace airgrep {
 
@@ -13,6 +15,27 @@ struct GNSSMessageRate {
 // (PIO 3), supply switched by LNA_EN.
 inline constexpr uint8_t AIRGREP_REV_A_ANT_OPEN_PIN = 2;
 inline constexpr uint8_t AIRGREP_REV_A_ANT_SHORT_PIN = 3;
+
+template <typename Write>
+void WriteReceiverSettings(GNSSSettingsOptions::GNSSAntennaMode mode, Write write) {
+    using Cfg = M10Config;
+    using Options = GNSSSettingsOptions;
+    const bool supervised = mode == Options::kGNSSAntennaActiveSupervised;
+    const uint8_t antenna = Cfg::AntennaSetting(mode);
+    write(Cfg::kCfgRateMeas, 1000, 2);
+    write(Cfg::kCfgRateNav, 1, 2);
+    write(Cfg::kCfgSignalSbas, 1, 1);
+    write(Cfg::kCfgI2cEnabled, 0, 1);
+    write(Cfg::kCfgItfmAntSetting, antenna, 1);
+    write(Cfg::kCfgHwAntCfgVoltCtrl, supervised, 1);
+    write(Cfg::kCfgHwAntCfgShortDet, supervised, 1);
+    write(Cfg::kCfgHwAntCfgOpenDet, supervised, 1);
+    if (supervised) {
+        write(Cfg::kCfgHwAntSupShortPin, AIRGREP_REV_A_ANT_SHORT_PIN, 1);
+        write(Cfg::kCfgHwAntSupOpenPin, AIRGREP_REV_A_ANT_OPEN_PIN, 1);
+    }
+}
+
 // The first eight entries quiet UART1 before the remaining message rates are applied.
 inline constexpr uint8_t kBootstrapMessageCount = 8;
 
@@ -84,5 +107,34 @@ inline constexpr GNSSMessageRate kGNSSMessages[] = {
     {0x20920002, 0},  // INFMSG-UBX_UART1
     {0x20920007, 0},  // INFMSG-NMEA_UART1
 };
+inline constexpr uint16_t kGNSSMessageCount = sizeof(kGNSSMessages) / sizeof(kGNSSMessages[0]);
+
+// Copy up to limit entries of kGNSSMessages from offset into out. diagnostics adds the receiver's INF messages.
+// @retval Number of entries copied.
+inline uint8_t LoadMessages(uint16_t offset, uint8_t limit, bool diagnostics, GNSSMessageRate* out) {
+    uint8_t count = 0;
+    for (; count < limit && offset + count < kGNSSMessageCount; ++count) {
+        out[count] = kGNSSMessages[offset + count];
+        if (out[count].key == M10Config::kCfgInfmsgUbxUart1 && diagnostics)
+            out[count].rate = M10Config::kInfmsgErrorAndWarning;
+    }
+    return count;
+}
+
+// UBX-CFG-VALSET payload that sets the rates of messages in layers. Needs 4 + 5 * count bytes.
+// @retval Payload length.
+inline uint16_t WriteMessageRates(uint8_t* payload, uint8_t layers, const GNSSMessageRate* messages, uint8_t count) {
+    uint16_t length = BeginCfgValset(payload, layers);
+    for (uint8_t i = 0; i < count; ++i) length = AppendCfgKeyValue(payload, length, messages[i].key, messages[i].rate, 1);
+    return length;
+}
+
+// UBX-CFG-VALGET request for the RAM rates of messages. Needs 4 + 4 * count bytes.
+// @retval Payload length.
+inline uint16_t WriteMessageKeys(uint8_t* payload, const GNSSMessageRate* messages, uint8_t count) {
+    uint16_t length = BeginCfgValget(payload, M10Config::kCfgGetLayerRam);
+    for (uint8_t i = 0; i < count; ++i) length = AppendCfgKeyValue(payload, length, messages[i].key, 0, 0);
+    return length;
+}
 
 }  // namespace airgrep

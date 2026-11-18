@@ -11,12 +11,24 @@ class M10Diagnostics {
     static constexpr uint8_t kClassNav = 0x01, kClassInf = 0x04, kClassMon = 0x0A;
     static constexpr uint8_t kIdInfError = 0x00, kIdInfWarning = 0x01;
     static constexpr uint8_t kIdNavSbas = 0x32, kIdNavSat = 0x35;
-    static constexpr uint8_t kIdMonComms = 0x36, kIdMonHw3 = 0x37, kIdMonRf = 0x38;
+    static constexpr uint8_t kIdMonVer = 0x04, kIdMonComms = 0x36, kIdMonHw3 = 0x37, kIdMonRf = 0x38;
     static constexpr uint8_t kStoredSbasSatellites = 8;
     static constexpr uint8_t kSbasServiceCorrections = 0x02;  // Service bit: correction data is provided.
     static constexpr uint8_t kStoredCommsPorts = 4;
     static constexpr uint8_t kStoredHw3Pins = 16;
     // Count is the wire count. Arrays retain the first entries up to their stored limit.
+
+    static constexpr uint32_t kStatusMaxAgeMs = 15000;
+    template <typename T>
+    struct Latest {
+        bool valid = false;
+        uint32_t received_ms = 0;
+        T value{};
+        bool IsFresh(uint32_t now_ms) const { return valid && now_ms - received_ms <= kStatusMaxAgeMs; }
+    };
+    struct Version {
+        char module[27] = "", software[31] = "", hardware[11] = "";
+    };
 
     struct SbasSatellite {
         uint8_t id = 0, udre = 0, system = 0, service = 0;
@@ -74,6 +86,7 @@ class M10Diagnostics {
     class Listener {
        public:
         virtual ~Listener() = default;
+        virtual void OnVersion(const Version&) {}
         // text is not NUL terminated. truncated means the parser kept only the first length bytes.
         virtual void OnInfo(bool error, const char* text, uint16_t length, bool truncated) {}
         virtual void OnSbas(const SbasStatus& sbas) {}

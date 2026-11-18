@@ -13,28 +13,30 @@ int8_t HexCharToNibble(char c) {
     return -1;
 }
 
-// Parse an NMEA latitude/longitude field in ddmm.mmmm / dddmm.mmmm format plus a hemisphere
-// character ('N'/'S'/'E'/'W') into signed decimal degrees. Returns false if either field is empty.
-bool ParseLatLon(const char* coord, const char* hemi, float& out_deg) {
-    if (coord == nullptr || coord[0] == '\0' || hemi == nullptr || hemi[0] == '\0') {
-        return false;
+enum class Axis { latitude, longitude };
+
+bool ParseCoordinate(const char* field, const char* hemisphere, Axis axis, float& out_deg) {
+    const bool lat = axis == Axis::latitude;
+    const char positive = lat ? 'N' : 'E', negative = lat ? 'S' : 'W';
+    if ((*hemisphere != positive && *hemisphere != negative) || hemisphere[1]) return false;
+    const unsigned degree_digits = lat ? 2 : 3;
+    const unsigned limit = lat ? 90 : 180;
+    unsigned degrees = 0;
+    for (unsigned i = 0; i < degree_digits; ++i) {
+        if (*field < '0' || *field > '9') return false;
+        degrees = degrees * 10 + (*field++ - '0');
     }
-    // Degrees are all digits before the decimal point except the last two (which are minutes).
-    const char* dot = strchr(coord, '.');
-    uint16_t int_digits = dot ? static_cast<uint16_t>(dot - coord) : static_cast<uint16_t>(strlen(coord));
-    if (int_digits < 3) return false;  // Need at least dd + mm.
-    uint16_t deg_digits = int_digits - 2;
-
-    char deg_str[4] = {0};
-    if (deg_digits >= sizeof(deg_str)) return false;
-    memcpy(deg_str, coord, deg_digits);
-
-    float degrees = static_cast<float>(atoi(deg_str));
-    float minutes = strtof(coord + deg_digits, nullptr);
-    float value = degrees + minutes / 60.0f;
-
-    if (hemi[0] == 'S' || hemi[0] == 'W') value = -value;
-    out_deg = value;
+    const char* minutes = field;
+    if (field[0] < '0' || field[0] > '5' || field[1] < '0' || field[1] > '9') return false;
+    field += 2;
+    if (*field == '.') {
+        ++field;
+        if (!*field) return false;
+        while (*field >= '0' && *field <= '9') ++field;
+    }
+    if (*field || degrees > limit || (degrees == limit && strspn(minutes, "0.") != strlen(minutes))) return false;
+    const float value = degrees + strtof(minutes, nullptr) / 60.0f;
+    out_deg = *hemisphere == negative ? -value : value;
     return true;
 }
 
@@ -94,8 +96,8 @@ bool ParseUTCDate(const char* field, uint32_t& days_since_epoch) {
 
 }  // namespace
 
-bool NMEAParser::GetUTCUnixMs(uint32_t now_ms, uint64_t& utc_unix_ms) const {
-    uint32_t age_ms = now_ms - utc_update_timestamp_ms_;
+bool NMEAParser::GetUTCUnixMs(uint64_t now_ms, uint64_t& utc_unix_ms) const {
+    uint64_t age_ms = now_ms - utc_update_timestamp_ms_;
     if (!utc_valid_ || age_ms >= kUTCStaleTimeoutMs) return false;
     utc_unix_ms = utc_unix_ms_ + age_ms;
     return true;
@@ -206,12 +208,13 @@ NMEAParser::SentenceType NMEAParser::ParseGGA(const char* const* fields, uint8_t
     }
 
     float lat, lon;
-    if (fix_quality > 0 && ParseLatLon(fields[2], fields[3], lat) && ParseLatLon(fields[4], fields[5], lon)) {
+    if (fix_quality > 0 && ParseCoordinate(fields[2], fields[3], Axis::latitude, lat) &&
+        ParseCoordinate(fields[4], fields[5], Axis::longitude, lon)) {
         fix_.latitude_deg = lat;
         fix_.longitude_deg = lon;
         fix_.valid = true;
         fix_.last_update_timestamp_ms = timestamp_ms_;
-    } else if (fix_quality == 0) {
+    } else {
         fix_.valid = false;
     }
     return kSentenceGGA;
@@ -247,12 +250,13 @@ NMEAParser::SentenceType NMEAParser::ParseRMC(const char* const* fields, uint8_t
     }
 
     float lat, lon;
-    if (status_valid && ParseLatLon(fields[3], fields[4], lat) && ParseLatLon(fields[5], fields[6], lon)) {
+    if (status_valid && ParseCoordinate(fields[3], fields[4], Axis::latitude, lat) &&
+        ParseCoordinate(fields[5], fields[6], Axis::longitude, lon)) {
         fix_.latitude_deg = lat;
         fix_.longitude_deg = lon;
         fix_.valid = true;
         fix_.last_update_timestamp_ms = timestamp_ms_;
-    } else if (!status_valid) {
+    } else {
         fix_.valid = false;
     }
     return kSentenceRMC;

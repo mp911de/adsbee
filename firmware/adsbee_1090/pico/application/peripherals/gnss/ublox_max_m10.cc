@@ -2,55 +2,19 @@
 
 #include <cstring>
 
+#ifdef AIRGREP
+#include "airgrep_m10_readback.hh"
+#endif
 #include "comms.hh"  // For comms_manager (UART I/O) and CONSOLE_* logging.
 #include "hal.hh"    // For get_time_since_boot_ms().
 #include "hardware/uart.h"
 #include "hardware/watchdog.h"  // For watchdog_update() during the blocking init/config pass.
 #include "pico/time.h"
 
-namespace {
-
-// Copies a NUL padded text field of length bytes into a NUL terminated buffer.
-template <size_t N>
-void CopyField(char (&out)[N], const uint8_t* field, size_t length) {
-    size_t copied = strnlen(reinterpret_cast<const char*>(field), length < N - 1 ? length : N - 1);
-    memcpy(out, field, copied);
-    out[copied] = '\0';
-}
-
-// Append a UBX-CFG-VALSET cfgData entry (4-byte key, little-endian, followed by value_size value
-// bytes, little-endian) to buf at offset. Returns the new offset.
-uint16_t AppendCfgKeyValue(uint8_t* buf, uint16_t offset, uint32_t key_id, uint64_t value, uint8_t value_size_bytes) {
-    buf[offset++] = key_id & 0xFF;
-    buf[offset++] = (key_id >> 8) & 0xFF;
-    buf[offset++] = (key_id >> 16) & 0xFF;
-    buf[offset++] = (key_id >> 24) & 0xFF;
-    for (uint8_t i = 0; i < value_size_bytes; i++) {
-        buf[offset++] = (value >> (8 * i)) & 0xFF;
-    }
-    return offset;
-}
-
-}  // namespace
-
 void UbloxMAXM10::SendUbxFrame(uint8_t msg_class, uint8_t msg_id, const uint8_t* payload, uint16_t payload_len) {
-    comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(UbxParser::kSync1));
-    comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(UbxParser::kSync2));
-
-    UbxChecksum checksum;
-
-    uint8_t header[4] = {msg_class, msg_id, static_cast<uint8_t>(payload_len & 0xFF),
-                         static_cast<uint8_t>((payload_len >> 8) & 0xFF)};
-    for (uint8_t i = 0; i < sizeof(header); i++) {
-        comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(header[i]));
-        checksum.Update(header[i]);
-    }
-    for (uint16_t i = 0; i < payload_len; i++) {
-        comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(payload[i]));
-        checksum.Update(payload[i]);
-    }
-    comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(checksum.a));
-    comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(checksum.b));
+    WriteUbxFrame(msg_class, msg_id, payload, payload_len, [](uint8_t byte) {
+        comms_manager.iface_putc(SettingsManager::kGNSSUART, static_cast<char>(byte));
+    });
 }
 
 bool UbloxMAXM10::ScanForUbxMessage(uint8_t want_class, uint8_t want_id, uint32_t timeout_ms, uint8_t* out_payload,
@@ -83,8 +47,7 @@ void UbloxMAXM10::OnUbxMessage(const UbxMessage& message) {
 bool UbloxMAXM10::MatchScan(const UbxMessage& message) {
     const uint8_t* p = message.payload;
     // An ACK/NAK for the awaited class/id answers a config request when the caller asked for it.
-    if (scan_.config_nak != nullptr && message.cls == kUbxClassAck && message.length == 2 && p[0] == scan_.cls &&
-        p[1] == scan_.id && (message.id == kUbxIdAckAck || message.id == kUbxIdAckNak)) {
+    if (scan_.config_nak != nullptr && IsAckFor(message, scan_.cls, scan_.id)) {
         *scan_.config_nak = message.id == kUbxIdAckNak;
         if (scan_.out_len != nullptr) *scan_.out_len = 0;
         return true;
@@ -116,20 +79,17 @@ bool UbloxMAXM10::WaitForAck(uint8_t acked_class, uint8_t acked_id) {
 
 bool UbloxMAXM10::Probe() {
     watchdog_update();
-    SendUbxFrame(kUbxClassMon, kUbxIdMonVer, nullptr, 0);
+    SendUbxFrame(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonVer, nullptr, 0);
     uint8_t payload[640];
     uint16_t length = 0;
-    if (!ScanForUbxMessage(kUbxClassMon, kUbxIdMonVer, kProbeTimeoutMs, payload, sizeof(payload), &length, nullptr))
+    if (!ScanForUbxMessage(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonVer, kProbeTimeoutMs, payload, sizeof(payload), &length, nullptr))
         return false;
     if (length >= 40 && length <= sizeof(payload) && (length - 40) % 30 == 0) {
         CONSOLE_INFO("UbloxMAXM10::Probe", "GNSS version: software=%.*s hardware=%.*s", 30,
                      reinterpret_cast<const char*>(payload), 10, reinterpret_cast<const char*>(payload + 30));
-        CopyField(version_.software, payload, 30);
-        CopyField(version_.hardware, payload + 30, 10);
         for (uint16_t offset = 40; offset < length; offset += 30) {
             CONSOLE_INFO("UbloxMAXM10::Probe", "GNSS version extension: %.*s", 30,
                          reinterpret_cast<const char*>(payload + offset));
-            if (memcmp(payload + offset, "MOD=", 4) == 0) CopyField(version_.module, payload + offset + 4, 26);
         }
     }
     return true;
@@ -144,8 +104,9 @@ void UbloxMAXM10::SetHostBaudrate(uint32_t baudrate) {
 }
 
 void UbloxMAXM10::SendBaudrate(uint32_t baudrate, uint8_t layers) {
-    uint8_t payload[4 + 4 + 4] = {0, layers, 0, 0};
-    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, AppendCfgKeyValue(payload, 4, kCfgUart1Baudrate, baudrate, 4));
+    uint8_t payload[4 + 4 + 4];
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload,
+                 AppendCfgKeyValue(payload, BeginCfgValset(payload, layers), kCfgUart1Baudrate, baudrate, 4));
     uart_tx_wait_blocking(config_.uart_handle);
 }
 
@@ -178,46 +139,20 @@ bool UbloxMAXM10::ConnectAtConfiguredBaudrate() {
 }
 
 bool UbloxMAXM10::CfgValGet(uint32_t key_id, uint8_t value_size_bytes, uint64_t& value_out, uint8_t layer) {
-    // Poll one key from the RAM layer. Request payload: version(0) + layer(0=RAM) + position(u2=0)
-    // + key(u4). (See interface description S3.10.4.)
     uint8_t req[4 + 4];
-    req[0] = 0x00;                            // version 0 (poll request)
-    req[1] = layer;                           // layer
-    req[2] = 0x00;                            // position lo
-    req[3] = 0x00;                            // position hi
-    AppendCfgKeyValue(req, 4, key_id, 0, 0);  // key only, no value bytes for a poll request.
-    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValget, req, sizeof(req));
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValget, req, AppendCfgKeyValue(req, BeginCfgValget(req, layer), key_id, 0, 0));
 
-    // Response (UBX-CFG-VALGET, version 1): version(0x01) + layer + position(u2) + repeated
-    // [key(u4) + value]. For our single-key request the first (only) pair starts at offset 4.
     uint8_t resp[4 + 4 + 8];  // header + one key + up to an 8-byte value.
     uint16_t resp_len = 0;
     if (!ScanForUbxMessage(kUbxClassCfg, kUbxIdCfgValget, kAckTimeoutMs, resp, sizeof(resp), &resp_len, nullptr)) {
         return false;  // No VALGET response (key unknown to the receiver, or timed out).
     }
-    // Need the 4-byte header + 4-byte key + value_size_bytes of value.
-    if (resp_len < static_cast<uint16_t>(4 + 4 + value_size_bytes)) {
-        return false;  // Response too short (e.g. key not present in this layer).
-    }
-    uint32_t returned_key = static_cast<uint32_t>(resp[4]) | (static_cast<uint32_t>(resp[5]) << 8) |
-                            (static_cast<uint32_t>(resp[6]) << 16) | (static_cast<uint32_t>(resp[7]) << 24);
-    if (returned_key != key_id) return false;
-    uint64_t value = 0;
-    for (uint8_t i = 0; i < value_size_bytes; i++) {
-        value |= static_cast<uint64_t>(resp[4 + 4 + i]) << (8 * i);
-    }
-    value_out = value;
-    return true;
+    return ReadCfgValue(resp, resp_len, layer, key_id, value_size_bytes, value_out);
 }
 
 bool UbloxMAXM10::CfgValSet(uint32_t key_id, uint64_t value, uint8_t value_size_bytes, uint8_t layers) {
-    // Payload: version(0) + layers + reserved[2] + cfgData(key + value).
     uint8_t payload[4 + 4 + 8];
-    payload[0] = 0x00;    // version 0 (transactionless)
-    payload[1] = layers;  // RAM/BBR/Flash bitfield
-    payload[2] = 0x00;    // reserved
-    payload[3] = 0x00;    // reserved
-    uint16_t len = AppendCfgKeyValue(payload, 4, key_id, value, value_size_bytes);
+    uint16_t len = AppendCfgKeyValue(payload, BeginCfgValset(payload, layers), key_id, value, value_size_bytes);
 
     SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, len);
     return WaitForAck(kUbxClassCfg, kUbxIdCfgValset);
@@ -255,48 +190,39 @@ int32_t UbloxMAXM10::SyncConfigDefaults(uint32_t deadline_ms) {
     return num_written;
 }
 
+#ifndef AIRGREP
 void UbloxMAXM10::ApplyRuntimeMessageConfig(uint8_t layers) {
-    // Factory default for NMEA message output rates is 0 (off); we need GGA + RMC at 1 Hz.
-    CfgValSetU1(kCfgMsgoutNmeaGgaUart1, 1, layers);
-    CfgValSetU1(kCfgMsgoutNmeaRmcUart1, 1, layers);
-    // Silence the other NMEA sentences we don't consume, to reduce UART traffic.
-    CfgValSetU1(kCfgMsgoutNmeaGsaUart1, 0, layers);
-    CfgValSetU1(kCfgMsgoutNmeaGsvUart1, 0, layers);
-    CfgValSetU1(kCfgMsgoutNmeaGllUart1, 0, layers);
-    CfgValSetU1(kCfgMsgoutNmeaVtgUart1, 0, layers);
+    WriteMessageSelection(settings_manager.settings.gnss_diagnostics,
+                          [&](uint32_t key, uint8_t rate) { CfgValSetU1(key, rate, layers); });
+    CfgValSetE1(kCfgItfmAntSetting, AntennaSetting(settings_manager.settings.gnss_antenna), layers);
+    // TEMPORARY: NAV-SAT feeds DebugDumpModuleStatus (remove with the rest of the debug instrumentation).
+    CfgValSetU1(kCfgMsgoutUbxNavSatUart1, 1, layers);
 }
+#endif
 
 #ifdef AIRGREP
 bool UbloxMAXM10::ConfigureAirgrep(uint8_t layers) {
-    bool msgs = ConfigureAirgrepMessages(layers);
-    bool meas = CfgValSetU2(kCfgRateMeas, 1000, layers);
-    bool navrate = CfgValSetU2(kCfgRateNav, 1, layers);
-
+    bool ok = ConfigureAirgrepMessages(layers);
     uint64_t sbas_configured = 0;
     CfgValGet(kCfgSignalSbas, 1, sbas_configured, kCfgGetLayerBbr);
 
     sbas_known_configured_ = sbas_configured != 0;
-    bool sbas = CfgValSetL(kCfgSignalSbas, true, layers);
-    bool i2c = CfgValSetL(kCfgI2cEnabled, false, layers);  // SDA/SCL carry the antenna supervisor signals.
-    bool antenna = ConfigureAntenna(layers);
-
-    return msgs && meas && navrate && sbas && i2c && antenna;
+    airgrep::WriteReceiverSettings(settings_manager.settings.gnss_antenna, [&](uint32_t key, uint16_t value, uint8_t size) {
+        ok &= CfgValSet(key, value, size, layers);
+    });
+    return ok;
 }
 
 bool UbloxMAXM10::ConfigureAirgrepMessages(uint8_t layers) {
     if (!ApplyMessageBatch(airgrep::kGNSSMessages, airgrep::kBootstrapMessageCount, layers, kBootstrapReplyTimeoutMs))
         return false;
 
-    constexpr uint16_t count = sizeof(airgrep::kGNSSMessages) / sizeof(airgrep::kGNSSMessages[0]);
-    for (uint16_t offset = airgrep::kBootstrapMessageCount; offset < count; offset += kMessageBatchSize) {
-        uint8_t batch_count = count - offset > kMessageBatchSize ? kMessageBatchSize : count - offset;
+    for (uint16_t offset = airgrep::kBootstrapMessageCount; offset < airgrep::kGNSSMessageCount;
+         offset += kMessageBatchSize) {
         airgrep::GNSSMessageRate messages[kMessageBatchSize];
-        for (uint8_t i = 0; i < batch_count; ++i) {
-            messages[i] = airgrep::kGNSSMessages[offset + i];
-            if (messages[i].key == kCfgInfmsgUbxUart1 && settings_manager.settings.gnss_diagnostics)
-                messages[i].rate = 3;
-        }
-        if (!ApplyMessageBatch(messages, batch_count, layers)) return false;
+        uint8_t count =
+            airgrep::LoadMessages(offset, kMessageBatchSize, settings_manager.settings.gnss_diagnostics, messages);
+        if (!ApplyMessageBatch(messages, count, layers)) return false;
     }
     return true;
 }
@@ -304,12 +230,8 @@ bool UbloxMAXM10::ConfigureAirgrepMessages(uint8_t layers) {
 bool UbloxMAXM10::ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint8_t layers,
                                     uint32_t timeout_ms) {
     watchdog_update();
-    uint8_t payload[4 + kMessageBatchSize * 5] = {0, layers, 0, 0};
-    uint16_t len = 4;
-    for (uint8_t i = 0; i < count; i++) {
-        len = AppendCfgKeyValue(payload, len, messages[i].key, messages[i].rate, 1);
-    }
-    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, len);
+    uint8_t payload[4 + kMessageBatchSize * 5];
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValset, payload, airgrep::WriteMessageRates(payload, layers, messages, count));
     bool nak = false;
     if (!ScanForUbxMessage(kUbxClassCfg, kUbxIdCfgValset, timeout_ms, nullptr, 0, nullptr, nullptr, &nak)) return false;
     if (!nak) return VerifyMessageBatch(messages, count, timeout_ms);
@@ -325,10 +247,8 @@ bool UbloxMAXM10::ApplyMessageBatch(const airgrep::GNSSMessageRate* messages, ui
 }
 
 bool UbloxMAXM10::VerifyMessageBatch(const airgrep::GNSSMessageRate* messages, uint8_t count, uint32_t timeout_ms) {
-    uint8_t request[4 + kMessageBatchSize * 4] = {};
-    uint16_t len = 4;
-    for (uint8_t i = 0; i < count; i++) len = AppendCfgKeyValue(request, len, messages[i].key, 0, 0);
-    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValget, request, len);
+    uint8_t request[4 + kMessageBatchSize * 4];
+    SendUbxFrame(kUbxClassCfg, kUbxIdCfgValget, request, airgrep::WriteMessageKeys(request, messages, count));
     uint32_t start_ms = get_time_since_boot_ms();
     for (uint32_t elapsed; (elapsed = get_time_since_boot_ms() - start_ms) < timeout_ms;) {
         uint8_t response[4 + kMessageBatchSize * 5];
@@ -347,32 +267,15 @@ bool UbloxMAXM10::VerifyMessageBatch(const airgrep::GNSSMessageRate* messages, u
             return VerifyMessageBatch(messages, half, timeout_ms) &&
                    VerifyMessageBatch(messages + half, count - half, timeout_ms);
         }
-        if (response_len < 4 || response_len > 4 + count * 5 || (response_len - 4) % 5 != 0 || response[0] != 1 ||
-            response[1] != 0 || response[2] != 0 || response[3] != 0)
-            continue;
-        uint32_t seen = 0;
-        bool matches = true;
-        for (uint8_t i = 0; i < (response_len - 4) / 5; i++) {
-            const uint8_t* entry = response + 4 + i * 5;
-            uint32_t key = static_cast<uint32_t>(entry[0]) | (static_cast<uint32_t>(entry[1]) << 8) |
-                           (static_cast<uint32_t>(entry[2]) << 16) | (static_cast<uint32_t>(entry[3]) << 24);
-            uint8_t j = 0;
-            while (j < count && messages[j].key != key) j++;
-            if (j == count || (seen & (1u << j))) {
-                matches = false;
-                break;
-            }
-            if (entry[4] != messages[j].rate) return false;
-            seen |= 1u << j;
-        }
-        if (!matches) continue;
+        uint32_t missing_keys = 0;
+        const auto result = airgrep::CheckMessageReadback(messages, count, response, response_len, &missing_keys);
+        if (result == airgrep::Readback::unrelated) continue;
         for (uint8_t i = 0; i < count; i++) {
-            if (seen & (1u << i)) continue;
+            if (!(missing_keys & (1u << i))) continue;
             CONSOLE_WARNING("UbloxMAXM10::VerifyMessageBatch", "GNSS message key 0x%08lx missing from read-back.",
                             static_cast<unsigned long>(messages[i].key));
-            if (messages[i].rate != 0) return false;
         }
-        return true;
+        return result == airgrep::Readback::verified;
     }
     return false;
 }
@@ -400,39 +303,8 @@ bool UbloxMAXM10::SendInitCommands() {
     // Enable AssistNow Autonomous so the module predicts its own orbits and shortens time-to-fix
     // even after a genuine cold start (factory default is disabled).
     CfgValSetL(kCfgAnaUseAna, true, layers);
-    ApplyDiagnosticStreams(layers);
     return true;
 #endif
-}
-
-#ifndef AIRGREP
-void UbloxMAXM10::ApplyDiagnosticStreams(uint8_t layers) {
-    CfgValSetU1(kCfgMsgoutUbxMonRfUart1, kDiagnosticsEpochDivider, layers);
-    CfgValSetU1(kCfgMsgoutUbxNavSbasUart1, kDiagnosticsEpochDivider, layers);
-    CfgValSetU1(kCfgInfmsgUbxUart1, settings_manager.settings.gnss_diagnostics ? 3 : 0, layers);
-    ConfigureAntenna(layers);
-    // TEMPORARY: NAV-SAT feeds DebugDumpModuleStatus (remove with the rest of the debug instrumentation).
-    CfgValSetU1(kCfgMsgoutUbxNavSatUart1, 1, layers);
-}
-#endif
-
-bool UbloxMAXM10::ConfigureAntenna(uint8_t layers) {
-    SettingsManager::GNSSAntennaMode mode = settings_manager.settings.gnss_antenna;
-    uint8_t setting = mode == SettingsManager::kGNSSAntennaPassive   ? 1
-                      : mode == SettingsManager::kGNSSAntennaUnknown ? 0
-                                                                     : 2;
-    bool ok = CfgValSetE1(kCfgItfmAntSetting, setting, layers);
-#ifdef AIRGREP
-    bool supervised = mode == SettingsManager::kGNSSAntennaActiveSupervised;
-    ok &= CfgValSetL(kCfgHwAntCfgVoltCtrl, supervised, layers);
-    ok &= CfgValSetL(kCfgHwAntCfgShortDet, supervised, layers);
-    ok &= CfgValSetL(kCfgHwAntCfgOpenDet, supervised, layers);
-    if (supervised) {
-        ok &= CfgValSetU1(kCfgHwAntSupShortPin, airgrep::AIRGREP_REV_A_ANT_SHORT_PIN, layers);
-        ok &= CfgValSetU1(kCfgHwAntSupOpenPin, airgrep::AIRGREP_REV_A_ANT_OPEN_PIN, layers);
-    }
-#endif
-    return ok;
 }
 
 void UbloxMAXM10::ResendRuntimeConfig() {
@@ -445,7 +317,6 @@ void UbloxMAXM10::ResendRuntimeConfig() {
     // the live fix is undisturbed.
     if (!ConnectAtConfiguredBaudrate()) return;
     ApplyRuntimeMessageConfig(kCfgLayerRam);
-    ApplyDiagnosticStreams(kCfgLayerRam);
 #endif
 }
 
@@ -505,16 +376,16 @@ void UbloxMAXM10::OnSatellites(const M10Diagnostics::SatelliteSummary& satellite
 
 bool UbloxMAXM10::PollComms(M10Diagnostics::CommsStatus& comms) {
     comms_.valid = false;
-    SendUbxFrame(kUbxClassMon, kUbxIdMonComms, nullptr, 0);
-    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonComms, kDiagnosticsTimeoutMs) || !comms_.valid) return false;
+    SendUbxFrame(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonComms, nullptr, 0);
+    if (!WaitForUbxMessage(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonComms, kDiagnosticsTimeoutMs) || !comms_.valid) return false;
     comms = comms_.value;
     return true;
 }
 
 bool UbloxMAXM10::PollHw3(M10Diagnostics::Hw3Status& hw3) {
     hw3_.valid = false;
-    SendUbxFrame(kUbxClassMon, kUbxIdMonHw3, nullptr, 0);
-    if (!WaitForUbxMessage(kUbxClassMon, kUbxIdMonHw3, kDiagnosticsTimeoutMs) || !hw3_.valid) return false;
+    SendUbxFrame(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonHw3, nullptr, 0);
+    if (!WaitForUbxMessage(M10Diagnostics::kClassMon, M10Diagnostics::kIdMonHw3, kDiagnosticsTimeoutMs) || !hw3_.valid) return false;
     hw3 = hw3_.value;
     return true;
 }

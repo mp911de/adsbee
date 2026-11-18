@@ -176,7 +176,9 @@ bool CommsManager::UpdateReporting(const ReportSinkInfo* sinks, uint16_t num_sin
             case SettingsManager::kBeastNoUATUplink:
                 break;  // ReportBeast picks its sinks from the descriptors.
             case SettingsManager::kCSBee:
+#ifdef AIRGREP
             case SettingsManager::kAirgrep:
+#endif
                 csbee_sinks[num_csbee_sinks++] = sinks[i].sink;
                 break;
             case SettingsManager::kMAVLINK1:
@@ -1011,7 +1013,8 @@ static ASTERIXReporter::Clock GetASTERIXClock() {
         clock.SetUTC(ASTERIXReporter::UTCMsOfDay(rp2040.gnss_utc_unix_ms), get_time_since_boot_ms(),
                      ASTERIXReporter::Clock::kSourceGNSS);
     }
-#elif !defined(ON_TI)
+#else
+#ifndef ON_TI
     // The ESP32 status is read on every main loop pass while the ESP32 is up.
     static constexpr uint32_t kNetworkUTCMaxAgeMs = 10000;
     if (esp32_ll.network_utc_time_valid &&
@@ -1019,6 +1022,7 @@ static ASTERIXReporter::Clock GetASTERIXClock() {
         clock.SetUTC(esp32_ll.network_utc_ms_of_day, esp32_ll.network_utc_timestamp_ms,
                      ASTERIXReporter::Clock::kSourceNetwork);
     }
+#endif
     uint64_t utc_unix_ms;
     if (gnss != nullptr && gnss->GetUTCUnixMs(utc_unix_ms)) {
         clock.SetUTC(ASTERIXReporter::UTCMsOfDay(utc_unix_ms), get_time_since_boot_ms(),

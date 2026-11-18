@@ -2,6 +2,7 @@
 if (TARGET application)
     target_sources(application PRIVATE
         comms_reporting.cpp
+        gnss_at.cpp
         asterix/asterix_utils.cpp
         beast/beast_utils.cpp
         gdl90/gdl90_utils.cpp

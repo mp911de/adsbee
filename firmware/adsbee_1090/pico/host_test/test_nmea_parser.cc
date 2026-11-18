@@ -168,12 +168,36 @@ TEST(NMEAParser, UTCMidnightAndFreshnessIndependentOfGGA) {
 
 TEST(NMEAParser, UTCMonotonicClockWrap) {
     NMEAParser parser;
-    parser.SetTimestampMs(0xFFFFFFF0);
-    FeedSentence(parser, "$GPRMC,000000,A,,,,,,,010100,,,A\r\n");
+    constexpr uint64_t wrap = 1ULL << 32;
+    parser.SetTimestampMs(wrap - 16);
+    FeedSentence(parser, "$GPRMC,000000,A,9000.00,N,18000.00,E,,,010100,,,A\r\n");
     uint64_t utc = 0;
-    ASSERT_TRUE(parser.GetUTCUnixMs(0x10, utc));
+    ASSERT_TRUE(parser.GetUTCUnixMs(wrap + 16, utc));
+    ASSERT_TRUE(parser.fix().IsFresh(wrap + 16));
     EXPECT_EQ(utc, 946684800032ULL);
-    EXPECT_FALSE(parser.GetUTCUnixMs(0x1380, utc));
+    EXPECT_FALSE(parser.GetUTCUnixMs(2 * wrap + 16, utc));
+    EXPECT_FALSE(parser.fix().IsFresh(2 * wrap + 16));
+}
+
+TEST(NMEAParser, RejectsInvalidCoordinatesWithoutReusingPreviousFix) {
+    const char* invalid[] = {"4807.038,E,01131.000,N", "4807.038,N,01131.000,X", "4807.038,NS,01131.000,E",
+                             "9100.000,N,01131.000,E", "9000.001,S,01131.000,E", "4807.038,N,18000.001,W",
+                             "4860.000,N,01131.000,E", "4807.038,N,01160.000,E", "48-7.038,N,01131.000,E",
+                             "4807.03x,N,01131.000,E", "4807e1,N,01131.000,E", "807.0,N,01131.000,E"};
+    for (const char* coordinates : invalid) {
+        for (bool gga : {false, true}) {
+            NMEAParser parser;
+            FeedSentence(parser, "$GPRMC,000000,A,9000.0,S,18000.0,W,,,010100\r\n");
+            ASSERT_TRUE(parser.fix().valid);
+            ASSERT_EQ(-90.0f, parser.fix().latitude_deg);
+            ASSERT_EQ(-180.0f, parser.fix().longitude_deg);
+            std::string sentence = gga ? "$GPGGA,000000," : "$GPRMC,000000,A,";
+            sentence += coordinates;
+            sentence += gga ? ",1,08,1.0,100,M\r\n" : ",,,010100\r\n";
+            FeedSentence(parser, sentence.c_str());
+            EXPECT_FALSE(parser.fix().valid) << sentence;
+        }
+    }
 }
 
 TEST(NMEAParser, UTCGregorianDateAndYearWindow) {

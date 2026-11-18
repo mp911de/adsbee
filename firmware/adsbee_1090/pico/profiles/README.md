@@ -15,7 +15,7 @@ ADSBEE_PROFILE=airgrep bash firmware/build.sh adsbee_1090 flash
 
 Both use 3.3 V and no flow control. USB is unchanged. At 9600 baud the UBX diagnostics saturate
 the GNSS link and delay RMC time by seconds, which FLARM decryption cannot tolerate.
-`airgrep` defines `AIRGREP` and selects UART1 messages through `airgrep_gnss.hh`.
+`airgrep` defines `AIRGREP` and shares its [UART1 message selection](../../../common/gnss/airgrep_m10_profile.hh) with M1421.
 It configures only message outputs, using acknowledged batches and read-back verification.
 Rejected batches are split to isolate optional unsupported outputs. Other profiles use upstream GNSS initialization.
 Debug and test builds also have separate profile directories. Flash uses the

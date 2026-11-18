@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "airgrep_m10_readback.hh"
 #include "gtest/gtest.h"
 #include "ubx_test_utils.hh"
 
@@ -16,6 +17,7 @@ struct Capture : public M10Diagnostics::Listener {
         bool truncated;
     };
     std::vector<Info> info;
+    std::vector<M10Diagnostics::Version> versions;
     std::vector<M10Diagnostics::SbasStatus> sbas;
     std::vector<M10Diagnostics::CommsStatus> comms;
     std::vector<M10Diagnostics::Hw3Status> hw3;
@@ -26,6 +28,7 @@ struct Capture : public M10Diagnostics::Listener {
         info.push_back({error, std::string(text, length), truncated});
     }
     void OnSbas(const M10Diagnostics::SbasStatus& s) override { sbas.push_back(s); }
+    void OnVersion(const M10Diagnostics::Version& version) override { versions.push_back(version); }
     void OnComms(const M10Diagnostics::CommsStatus& c) override { comms.push_back(c); }
     void OnHw3(const M10Diagnostics::Hw3Status& h) override { hw3.push_back(h); }
     void OnRf(const M10Diagnostics::RfStatus& r) override { rf.push_back(r); }
@@ -43,6 +46,35 @@ bool Decode(Capture& capture, uint8_t cls, uint8_t id, const std::string& payloa
 }
 
 }  // namespace
+
+TEST(M10Configuration, ReadbackRequiresEnabledMessagesAndIgnoresUnrelatedReplies) {
+    constexpr airgrep::GNSSMessageRate rates[] = {{0x209100bb, 1}, {0x209100c0, 0}};  // GGA, GSA
+    uint8_t reply[] = {1, 0, 0, 0, 0xbb, 0, 0x91, 0x20, 1};
+    uint32_t missing = 0;
+    EXPECT_EQ(airgrep::Readback::verified, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply), &missing));
+    EXPECT_EQ(2u, missing);
+    reply[8] = 0;
+    EXPECT_EQ(airgrep::Readback::mismatch, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
+    reply[4] = 0xc0;
+    EXPECT_EQ(airgrep::Readback::mismatch, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
+    reply[4] = 0xac;  // RMC belongs to a different request.
+    EXPECT_EQ(airgrep::Readback::unrelated, airgrep::CheckMessageReadback(rates, 2, reply, sizeof(reply)));
+}
+
+TEST(M10Diagnostics, ReadsBoundedVersionFieldsAndRejectsPartialExtensions) {
+    Capture c;
+    std::string payload(70, 'X');
+    payload.replace(40, 4, "MOD=");
+    ASSERT_TRUE(Decode(c, 0x0a, 4, payload));
+    ASSERT_EQ(1u, c.versions.size());
+    EXPECT_EQ(std::string(30, 'X'), c.versions[0].software);
+    EXPECT_EQ(std::string(10, 'X'), c.versions[0].hardware);
+    EXPECT_EQ(std::string(26, 'X'), c.versions[0].module);
+    EXPECT_FALSE(Decode(c, 0x0a, 4, payload, 40));
+    payload.pop_back();
+    EXPECT_FALSE(Decode(c, 0x0a, 4, payload));
+    EXPECT_EQ(1u, c.versions.size());
+}
 
 TEST(M10Diagnostics, ErrorAndWarningTextWithTruncationFlag) {
     Capture c;

@@ -26,7 +26,7 @@ class GNSSReceiver {
     using GNSSFix = NMEAParser::GNSSFix;
 
     // A fix is considered current only if it was updated within this window.
-    static constexpr uint32_t kFixStaleTimeoutMs = 5000;
+    static constexpr uint32_t kFixStaleTimeoutMs = GNSSFix::kStaleTimeoutMs;
     static constexpr uint32_t kVendorPowerOnDelayMs = 1000;
     static constexpr uint32_t kGenericPrePowerDelayMs = 100;
     static constexpr uint32_t kFixNotifyMinIntervalMs = 1000;
@@ -104,6 +104,7 @@ class GNSSReceiver {
 
     // UTC from the last PPS edge when available, otherwise from RMC reception time.
     bool GetUTCUnixMs(uint64_t& utc_unix_ms) const;
+    bool GetFixUTCUnixMs(uint64_t& utc_unix_ms) const { return GetUTCUnixMs(utc_unix_ms); }
 
     /**
      * @retval True if the module responded during Init() (i.e. it is present and configured).

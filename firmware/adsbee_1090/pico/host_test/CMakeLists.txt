@@ -82,16 +82,17 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         test_nmea_parser.cc
         test_ownship.cc
         test_ubx_parser.cc
-        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ubx_parser.cc
+        ${ADSBEE_COMMON_DIR}/gnss/ubx_parser.cc
+        test_m10_config.cc
         test_m10_diagnostics.cc
-        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_diagnostics.cc
+        ${ADSBEE_COMMON_DIR}/gnss/ublox_max_m10_diagnostics.cc
         test_m10_telemetry.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/ublox_max_m10_telemetry.cc
         test_airgrep_gnss_frame.cc
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/airgrep_gnss_frame.cc
         test_pps_clock.cc
         test_flarm.cc
-        ${CMAKE_SOURCE_DIR}/application/peripherals/gnss/nmea_parser.cc
+        ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc
         test_platform.cc
         test_reporting_aircraftjson.cc
         test_reporting_asterix.cc
@@ -136,6 +137,7 @@ foreach(_test_tgt IN ITEMS host_test host_test_fpu)
         ${ADSBEE_MODULES_DIR}/cppAT/settings # use default settings for testing
         ${ADSBEE_MODULES_DIR}/cppAT/src
         ${CMAKE_SOURCE_DIR}/application/peripherals/gnss
+        ${ADSBEE_COMMON_DIR}/gnss
         ${CMAKE_SOURCE_DIR}/../esp/main/remote_id # ble_adv_watchdog.hh, ble_scan_watchdog.hh
         ${CMAKE_SOURCE_DIR}/../esp/main/mlat_sync # esp32_clock_math.hh
         ${CMAKE_SOURCE_DIR}/application/peripherals # sync_pulse_service.hh

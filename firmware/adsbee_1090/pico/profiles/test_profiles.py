@@ -68,7 +68,8 @@ class BuildProfiles(unittest.TestCase):
             int(key, 16) for key in re.findall(
                 r"^\s*(?://\s*)?\{(0x[0-9a-f]+),.*// CFG-(?:MSGOUT|INFMSG)-\S+_UART1\b", defaults, re.M)
         }
-        entries = re.findall(r"\{(0x[0-9a-f]+), (\d+)\}", (PROFILES / "airgrep_gnss.hh").read_text())
+        profile = PROFILES.parents[2] / "common/gnss/airgrep_m10_profile.hh"
+        entries = re.findall(r"\{(0x[0-9a-f]+), (\d+)\}", profile.read_text())
         selected = {int(key, 16): int(rate) for key, rate in entries}
         self.assertEqual(len(entries), len(selected), "Duplicate message keys")
         self.assertEqual(set(selected), expected)

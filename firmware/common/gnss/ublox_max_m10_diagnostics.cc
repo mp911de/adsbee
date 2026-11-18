@@ -15,6 +15,17 @@ bool HasBlocks(const UbxMessage& message, size_t header, size_t stride, uint8_t 
 }  // namespace
 
 bool M10Diagnostics::Decode(const UbxMessage& message, Listener& listener) {
+    if (message.is_message_type(kClassMon, kIdMonVer)) {
+        if (message.length < 40 || message.stored != message.length || (message.length - 40) % 30) return false;
+        Version version;
+        memcpy(version.software, message.payload, 30);
+        memcpy(version.hardware, message.payload + 30, 10);
+        for (size_t offset = 40; offset < message.length; offset += 30) {
+            if (!memcmp(message.payload + offset, "MOD=", 4)) memcpy(version.module, message.payload + offset + 4, 26);
+        }
+        listener.OnVersion(version);
+        return true;
+    }
     if (message.cls == kClassInf && (message.id == kIdInfError || message.id == kIdInfWarning)) {
         listener.OnInfo(message.id == kIdInfError, reinterpret_cast<const char*>(message.payload), message.stored,
                         message.stored < message.length);

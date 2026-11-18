@@ -1,11 +1,12 @@
 #pragma once
 
 #include "gnss_receiver.hh"
+#include "ublox_max_m10_config.hh"
 #include "hal.hh"  // For get_time_since_boot_ms().
 #include "ublox_max_m10_telemetry.hh"
 #include "ubx_parser.hh"
 #ifdef AIRGREP
-#include "../../../profiles/airgrep_gnss.hh"
+#include "airgrep_m10_profile.hh"
 #endif
 #include "ublox_max_m10_defaults.hh"  // For kUbloxConfigDefaults[] (auto-generated).
 
@@ -19,7 +20,7 @@
  *     known-good baseline (V_BCKP is an always-on battery-derived rail, so BBR persists), then
  *     applies the application-specific overrides we need (e.g. enabling GGA/RMC output).
  */
-class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M10Diagnostics::Listener {
+class UbloxMAXM10 : public GNSSReceiver, public M10Config, private UbxParser::Listener, private M10Diagnostics::Listener {
    public:
     // Settle floor after power-on before we start probing. u-blox does not publish a fixed
     // Vcc-to-UART-ready time for the M10 (only TTFF, which is fix time, not UART readiness)
@@ -39,82 +40,17 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     // Overall wall-clock budget for the blocking config pass (SyncConfigDefaults).
     static constexpr uint32_t kInitConfigBudgetMs = 10000;
 
-    // UBX protocol constants.
-    static constexpr uint8_t kUbxClassCfg = 0x06;
-    static constexpr uint8_t kUbxClassAck = 0x05;
-    static constexpr uint8_t kUbxClassMon = 0x0A;
-    static constexpr uint8_t kUbxClassNav = 0x01;
-    static constexpr uint8_t kUbxIdCfgValset = 0x8A;
-    static constexpr uint8_t kUbxIdCfgValget = 0x8B;
-    static constexpr uint8_t kUbxIdMonVer = 0x04;
-    static constexpr uint8_t kUbxIdMonComms = 0x36;
-    static constexpr uint8_t kUbxIdMonHw3 = 0x37;
-    static constexpr uint8_t kUbxIdMonRf = 0x38;   // UBX-MON-RF: per-RF-block antenna/AGC/noise status.
-    static constexpr uint8_t kUbxIdNavSat = 0x35;  // UBX-NAV-SAT: per-satellite C/N0 + count.
-    static constexpr uint8_t kUbxIdAckAck = 0x01;
-    static constexpr uint8_t kUbxIdAckNak = 0x00;
     // Sentinel for WaitForUbxMessage to match any message id within the requested class. No real
     // UBX message id uses 0xFF.
     static constexpr uint8_t kUbxIdWildcard = 0xFF;
 
-    // VALSET "layers" bitfield (a config-set may target multiple layers at once).
-    enum CfgLayer : uint8_t {
-        kCfgLayerRam = 0x01,    // Effective immediately.
-        kCfgLayerBbr = 0x02,    // Battery-backed RAM; effective on restart, persists with V_BCKP.
-        kCfgLayerFlash = 0x04,  // External flash (if present)
-
-        kCfgGetLayerRam = 0x0,       // RAM layer
-        kCfgGetLayerBbr = 0x01,      // Battery-backed RAM
-        kCfgGetLayerFlash = 0x02,    // External flash.
-        kCfgGetLayerDefault = 0x07,  // default layer
-    };
-
-    // Selected commonly-used configuration key IDs. The full default catalog lives in
-    // ublox_max_m10_defaults.hh; these named constants are for the overrides we apply explicitly.
-    // Size of each value is encoded in bits 30..28 of the key id.
-    static constexpr uint32_t kCfgUart1Baudrate = 0x40520001;          // U4
-    static constexpr uint32_t kCfgMsgoutNmeaGgaUart1 = 0x209100bb;     // U1
-    static constexpr uint32_t kCfgMsgoutNmeaRmcUart1 = 0x209100ac;     // U1
-    static constexpr uint32_t kCfgMsgoutNmeaGsaUart1 = 0x209100c0;     // U1
-    static constexpr uint32_t kCfgMsgoutNmeaGsvUart1 = 0x209100c5;     // U1
-    static constexpr uint32_t kCfgMsgoutNmeaGllUart1 = 0x209100ca;     // U1
-    static constexpr uint32_t kCfgMsgoutNmeaVtgUart1 = 0x209100b1;     // U1
-    static constexpr uint32_t kCfgNmeaProtver = 0x20930001;            // E1
-    static constexpr uint32_t kCfgAnaUseAna = 0x10230001;             // L: AssistNow Autonomous enable
-    static constexpr uint32_t kCfgInfmsgUbxUart1 = 0x20920002;
-    static constexpr uint32_t kCfgRateMeas = 0x30210001;
-    static constexpr uint32_t kCfgRateNav = 0x30210002;
-    static constexpr uint32_t kCfgSignalSbas = 0x10310020;
-    static constexpr uint32_t kCfgSignalSbasL1Ca = 0x10310005;
-    static constexpr uint32_t kCfgMsgoutUbxMonRfUart1 = 0x2091035a;    // U1
-    static constexpr uint32_t kCfgMsgoutUbxNavSbasUart1 = 0x2091006b;  // U1
-    static constexpr uint32_t kCfgI2cEnabled = 0x10510003;             // L
-    static constexpr uint32_t kCfgItfmAntSetting = 0x20410010;         // E1: 0 unknown, 1 passive, 2 active
-    static constexpr uint32_t kCfgHwAntCfgVoltCtrl = 0x10a3002e;       // L
-    static constexpr uint32_t kCfgHwAntCfgShortDet = 0x10a3002f;       // L
-    static constexpr uint32_t kCfgHwAntCfgOpenDet = 0x10a30031;        // L
-    static constexpr uint32_t kCfgHwAntSupShortPin = 0x20a30037;       // U1, PIO number
-    static constexpr uint32_t kCfgHwAntSupOpenPin = 0x20a30038;        // U1, PIO number
-    // Diagnostic streams on UART1, every Nth navigation epoch.
-    static constexpr uint8_t kDiagnosticsEpochDivider = 5;
-    // TEMPORARY diagnostic (remove with the rest of the GNSS debug instrumentation).
-    static constexpr uint32_t kCfgMsgoutUbxNavSatUart1 = 0x20910016;  // U1
-
     // The latest record of one diagnostic kind and when it arrived.
     template <typename T>
-    struct Latest {
-        bool valid = false;
-        uint32_t received_ms = 0;
-        T value;
-        // A record this old no longer describes the module, e.g. after it stopped sending.
-        bool IsFresh(uint32_t now_ms) const { return valid && now_ms - received_ms <= kStatusMaxAgeMs; }
-    };
-    static constexpr uint32_t kStatusMaxAgeMs = 15000;
+    using Latest = M10Diagnostics::Latest<T>;
+    static constexpr uint32_t kStatusMaxAgeMs = M10Diagnostics::kStatusMaxAgeMs;
 
     // Text from UBX-MON-VER. Empty until the module answers a probe.
-    struct Version {
-        char module[27] = "", software[31] = "", hardware[11] = "";
-    };
+    using Version = M10Diagnostics::Version;
     UbloxMAXM10(GNSSReceiverConfig config_in) : GNSSReceiver(config_in, BSP::kGNSSModuleUbloxMAXM10) {}
 
     M10Telemetry* Telemetry() override { return &telemetry_; }
@@ -229,13 +165,11 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     //         deadline was exceeded (module stopped responding mid-pass).
     int32_t SyncConfigDefaults(uint32_t deadline_ms);
 
-    // Enable exactly the NMEA sentences we consume (GGA + RMC) and silence the rest, on UART1.
+#ifndef AIRGREP
+    // Apply the UART1 message selection (WriteMessageSelection), the antenna setting and NAV-SAT.
     // Cheap and idempotent; used both during init and after a UART handover (ResendRuntimeConfig).
     // @param[in] layers CfgLayer bitfield to target.
     void ApplyRuntimeMessageConfig(uint8_t layers);
-#ifndef AIRGREP
-    // MON-RF and NAV-SBAS every kDiagnosticsEpochDivider epochs, INF messages per the diagnostics setting.
-    void ApplyDiagnosticStreams(uint8_t layers);
 #endif
 
     // One pending ScanForUbxMessage, matched by OnUbxMessage.
@@ -256,6 +190,7 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
         telemetry_.OnInfo(error, text, length, truncated);
     }
     void OnRf(const M10Diagnostics::RfStatus& rf) override;
+    void OnVersion(const Version& version) override { version_ = version; }
     void OnSbas(const M10Diagnostics::SbasStatus& sbas) override;
     void OnComms(const M10Diagnostics::CommsStatus& comms) override;
     void OnHw3(const M10Diagnostics::Hw3Status& hw3) override;
@@ -275,6 +210,4 @@ class UbloxMAXM10 : public GNSSReceiver, private UbxParser::Listener, private M1
     Version version_;
     bool sbas_known_configured_ = false;
 
-    // Antenna mode from settings: ANTSETTING for the jamming detector and, in the airgrep profile, the supervisor.
-    bool ConfigureAntenna(uint8_t layers);
 };

@@ -12,6 +12,21 @@ struct UbxChecksum {
     }
 };
 
+template <typename PutByte>
+void WriteUbxFrame(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t length, PutByte put) {
+    put(0xb5);
+    put(0x62);
+    UbxChecksum checksum;
+    auto checked = [&](uint8_t byte) { checksum.Update(byte); put(byte); };
+    checked(cls);
+    checked(id);
+    checked(static_cast<uint8_t>(length));
+    checked(static_cast<uint8_t>(length >> 8));
+    for (uint16_t i = 0; i < length; ++i) checked(payload[i]);
+    put(checksum.a);
+    put(checksum.b);
+}
+
 // One checksum-verified UBX frame. payload holds the first stored bytes of a length byte payload.
 struct UbxMessage {
     uint8_t cls = 0, id = 0;
