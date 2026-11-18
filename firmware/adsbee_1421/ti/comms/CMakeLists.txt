@@ -1,6 +1,12 @@
 target_sources(${PROJECT_NAME} PRIVATE
     "comms.cpp"
+    "gnss_interface.cpp"
+    "m10_receiver.cpp"
+    ${ADSBEE_COMMON_DIR}/gnss/ubx_parser.cc
+    ${ADSBEE_COMMON_DIR}/gnss/ublox_max_m10_diagnostics.cc
+    ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc
     "at/comms_at.cpp"
+    ${ADSBEE_COMMON_DIR}/comms/gnss_at.cpp
     ${ADSBEE_COMMON_DIR}/comms/comms_reporting.cpp
     ${ADSBEE_COMMON_DIR}/comms/asterix/asterix_utils.cpp
     ${ADSBEE_COMMON_DIR}/comms/beast/beast_utils.cpp
@@ -14,6 +20,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 target_include_directories(${PROJECT_NAME} PRIVATE
     .
     at
+    ${ADSBEE_COMMON_DIR}/gnss
     ${ADSBEE_COMMON_DIR}/comms
     ${ADSBEE_COMMON_DIR}/comms/aircraftjson
     ${ADSBEE_COMMON_DIR}/comms/asterix

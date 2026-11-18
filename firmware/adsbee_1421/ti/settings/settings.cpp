@@ -111,6 +111,7 @@ bool SettingsManager::Apply() {
         settings.baud_rates[SerialInterface::kConsole] = baud;
     }
     success &= comms_manager.SetBaudRate(baud);
+    if (!IsGNSSBaudRate(settings.gnss_baud_rate)) settings.gnss_baud_rate = Settings::kDefaultGNSSBaudRate;
 
     // All other parameters are stored directly in the global setting struct and don't need to be applied.
 
@@ -244,6 +245,10 @@ void SettingsManager::Print() {
     CONSOLE_PRINTF("\t1090 Gain: %u (0 = auto AGC)\r\n", adsbee.GetR1090Gain());
     CONSOLE_PRINTF("\t1090 RX Boost: %u (0 = off, 7 = max)\r\n", adsbee.GetR1090RxBoost());
     CONSOLE_PRINTF("\tHardware LEDs: %s\r\n", settings.led_enabled ? "ENABLED" : "DISABLED");
+    CONSOLE_PRINTF("\tGNSS: %s (%s), fix notifications: %s, diagnostics: %s, antenna: %s\r\n",
+                   settings.gnss_enabled ? "ENABLED" : "DISABLED", GNSSReceiverTypeToStr(settings.gnss_receiver_type),
+                   settings.gnss_notify ? "ENABLED" : "DISABLED", settings.gnss_diagnostics ? "ENABLED" : "DISABLED",
+                   GNSSAntennaModeToStr(settings.gnss_antenna));
 
     // CommunicationsManager settings
     CONSOLE_PRINTF("\tLog Level: %s\r\n", kConsoleLogLevelStrs[settings.log_level]);
@@ -254,6 +259,7 @@ void SettingsManager::Print() {
     for (uint16_t i = 0; i < SerialInterface::kNumSerialInterfaces; i++) {
         CONSOLE_PRINTF("\tBaud Rate [%s]: %lu\r\n", kSerialInterfaceStrs[i], settings.baud_rates[i]);
     }
+    CONSOLE_PRINTF("\tBaud Rate [GNSS]: %lu\r\n", (unsigned long)settings.gnss_baud_rate);
 
     // MAVLINK settings
     CONSOLE_PRINTF("\tMAVLink System ID: %u\r\n", settings.mavlink_system_id);
@@ -298,6 +304,11 @@ void SettingsManager::PrintAT() {
     // AT+FILTER_ALTITUDE_FT
     CONSOLE_PRINTF("AT+FILTER_ALTITUDE_FT=%s,%ld,%ld\r\n", AltitudeFilterModeStr(settings.filter_altitude_mode),
                    (long)settings.filter_altitude_a_ft, (long)settings.filter_altitude_b_ft);
+
+    CONSOLE_PRINTF("AT+BAUD_RATE=GNSS,%lu\r\n", (unsigned long)settings.gnss_baud_rate);
+    CONSOLE_PRINTF("AT+GNSS=%d,%s,%d,%d,%s\r\n", settings.gnss_enabled,
+                   GNSSReceiverTypeToStr(settings.gnss_receiver_type), settings.gnss_notify, settings.gnss_diagnostics,
+                   GNSSAntennaModeToStr(settings.gnss_antenna));
 
     // AT+LED_ENABLE
     CONSOLE_PRINTF("AT+LED_ENABLE=%d\r\n", settings.led_enabled);

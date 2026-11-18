@@ -280,6 +280,13 @@ bool CommsManager::Resume() {
 }
 
 bool CommsManager::Update() {
+    if (ConsoleBreakSeen()) AnswerConsoleBreak();
+    UpdateAT();
+    ServiceReports();
+    return true;
+}
+
+void CommsManager::ServiceReports() {
     // Safety net for the TX ring: if a kick failed (UART2_write rejected) or a callback was lost, restart the drain.
     // In normal operation the write callback chains segments itself and this branch is never taken.
     if (!uart_tx_in_progress_ && uart_tx_head_ != uart_tx_tail_) {
@@ -290,8 +297,6 @@ bool CommsManager::Update() {
         HwiP_restore(key);
     }
 
-    if (ConsoleBreakSeen()) AnswerConsoleBreak();
-    UpdateAT();
     ReportQueuedRawPackets();
 
     uint32_t timestamp_ms = get_time_since_boot_ms();
@@ -306,7 +311,6 @@ bool CommsManager::Update() {
         UpdateReporting(sinks, num_sinks,
                         &no_packets);
     }
-    return true;
 }
 
 bool CommsManager::ReportsRawPackets() const {

@@ -13,6 +13,24 @@ Developer Kit.
 - [m1421 datasheet](../../word/exports/datasheet_adsbee_m1421.pdf): pinout and AT command
   reference.
 
+## External GNSS
+
+UART1 defaults to 9600 baud, 8N1. Use `AT+BAUD_RATE=GNSS,<baud>` to select the
+receiver rate and `AT+SETTINGS=SAVE` to keep it across boots.
+
+Connect m1421 pad 12 (SD23, TX) to MAX-M10S RXD,
+pad 13 (SD24, RX) to TXD, and pad 14 (SD25) to TIMEPULSE.
+`AT+GNSS=1,UBX_MIA` selects the MAX-M10S. Use `GENERIC` for an NMEA receiver.
+The factory receiver type is `NONE`. Once a type is selected, `AT+GNSS=0` releases the pins
+and `AT+GNSS=1` enables the saved type. Use `AT+SETTINGS=SAVE` to retain settings across boots.
+
+`AT+GNSS?` returns enable, type, fix notifications, diagnostics and antenna mode.
+`AT+GNSS_FIX?` reads the latest fix and PPS count. For an M10, `AT+GNSS_STATUS?` reads
+cached receiver and signal status, and `AT+GNSS_DIAG?` also polls live port and pin diagnostics.
+A rising PPS edge labeled by RMC
+supplies UTC to GDL90 and ASTERIX with any position source. Select `AT+RX_POSITION=GNSS` to use
+GNSS fixes for receiver position.
+
 ## Console autobaud
 
 The console runs at its saved baud rate: 9600 to 3,000,000, default 1,000,000

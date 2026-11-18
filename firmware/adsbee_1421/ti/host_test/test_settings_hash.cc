@@ -15,8 +15,13 @@ TEST(SettingsHash, SameSettingsSameHash) {
 TEST(SettingsHash, DefaultSettingsHashIsPinned) {
     // Changes only with the Settings struct or its defaults.
     SM::Settings settings;
-    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFleet), 0x64FB12DDu);
-    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFull), 0x692A4AABu);
+#ifdef AIRGREP
+    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFleet), 0xBF9A8771u);
+    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFull), 0xC931831Du);
+#else
+    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFleet), 0xE775C62Eu);
+    EXPECT_EQ(SettingsHash::Compute(settings, kScopeFull), 0x91DEC242u);
+#endif
 }
 
 TEST(SettingsHash, MagicAndStoredCRCDoNotCount) {
@@ -57,6 +62,12 @@ TEST(SettingsHash, EverySettingChangesBothHashes) {
                       [](SM::Settings& s) { s.rx_position.source = SM::RxPosition::kPositionSourceGNSS; });
     ExpectChangesBoth("asterix_sac", [](SM::Settings& s) { s.asterix_sac = 25; });
     ExpectChangesBoth("led_enabled", [](SM::Settings& s) { s.led_enabled = false; });
+    ExpectChangesBoth("gnss_enabled", [](SM::Settings& s) { s.gnss_enabled = true; });
+    ExpectChangesBoth("gnss_receiver_type", [](SM::Settings& s) { s.gnss_receiver_type = SM::kGNSSReceiverUBXMIA; });
+    ExpectChangesBoth("gnss_notify", [](SM::Settings& s) { s.gnss_notify = true; });
+    ExpectChangesBoth("gnss_diagnostics", [](SM::Settings& s) { s.gnss_diagnostics = true; });
+    ExpectChangesBoth("gnss_antenna", [](SM::Settings& s) { s.gnss_antenna = SM::kGNSSAntennaActiveSupervised; });
+    ExpectChangesBoth("gnss_baud_rate", [](SM::Settings& s) { s.gnss_baud_rate = 38400; });
 }
 
 TEST(SettingsHash, ASTERIXSICCountsOnlyInTheFullHash) {

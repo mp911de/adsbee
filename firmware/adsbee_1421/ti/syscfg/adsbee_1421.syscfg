@@ -25,6 +25,8 @@ const SPI      = scripting.addModule("/ti/drivers/SPI", {}, false);
 const SPI1     = SPI.addInstance();
 const UART2    = scripting.addModule("/ti/drivers/UART2", {}, false);
 const UART21   = UART2.addInstance();
+const gnssUart = UART2.addInstance();
+const gnssPps  = GPIO.addInstance();
 
 /**
  * Write custom configuration values to the imported modules.
@@ -144,3 +146,16 @@ UART21.rxPinInstance.$name      = "SUBG_UART_RX";
 UART21.rxPinInstance.pull       = "Pull Up";
 UART21.rxPinInstance.hysteresis = true;
 UART21.rxRingBufferSize         = 512;
+
+gnssUart.$name                    = "GNSS_UART";
+gnssUart.uart.$assign             = "UART1";
+gnssUart.uart.txPin.$assign       = "DIO_23";
+gnssUart.uart.rxPin.$assign       = "DIO_24";
+gnssUart.txPinInstance.$name      = "GNSS_TX";
+gnssUart.txPinInstance.mode       = "Input";
+gnssUart.rxPinInstance.$name      = "GNSS_RX";
+gnssUart.rxPinInstance.pull       = "None";
+gnssUart.rxRingBufferSize         = 256;
+gnssUart.txRingBufferSize         = 144;
+gnssPps.$name                     = "GNSS_PPS";
+gnssPps.gpioPin.$assign           = "DIO_25";

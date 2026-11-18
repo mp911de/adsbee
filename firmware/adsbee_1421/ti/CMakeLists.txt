@@ -36,6 +36,8 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 project(adsbee_1421 C CXX ASM)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/profile.cmake")
+
 # Derive firmware version from the single source of truth in object_dictionary.cpp (shared module,
 # also used by the programmer build to stamp its artifacts with the baked firmware version).
 set(FW_VERSION_OBJECT_DICTIONARY "${CMAKE_CURRENT_SOURCE_DIR}/object_dictionary/object_dictionary.cpp")

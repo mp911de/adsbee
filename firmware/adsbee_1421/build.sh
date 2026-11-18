@@ -27,6 +27,7 @@ Usage: ./build.sh [-d] [clean] [app|build_and_flash|flash]
               steps run at all. Warns first if that uf2 is older than the source tree,
               or older than the ti hex baked into it.
   (default)   build in Release
+  Set ADSBEE_PROFILE=airgrep to use the Airgrep MAX-M10S profile.
   -d          build in Debug instead of Release
   clean       remove <app>/build and exit
 EOF
@@ -61,6 +62,12 @@ for arg in "$@"; do
     esac
 done
 
+case "${ADSBEE_PROFILE:-default}" in
+    default) BUILD_VARIANT="$CONFIG" ;;
+    airgrep) BUILD_VARIANT="${CONFIG}-airgrep" ;;
+    *) echo "Unknown ADSBEE_PROFILE: $ADSBEE_PROFILE" >&2; exit 1 ;;
+esac
+
 if [ "$DO_FLASH" -eq 1 ] && [ "$DO_BUILD_AND_FLASH" -eq 1 ]; then
     echo "'flash' and 'build_and_flash' are alternatives; pass only one." >&2
     exit 1
@@ -90,6 +97,7 @@ build_app() {
             service="ti-lpf2"
             artifact="adsbee_1421"
             artifact_exts=(elf hex map)
+            extra_cmake_args="-DADSBEE_PROFILE=${ADSBEE_PROFILE:-default}"
             ;;
         programmer)
             service="pico-docker"
@@ -99,11 +107,11 @@ build_app() {
             # .uf2 files. Cache it outside build/ so `clean` does not force another download+build.
             extra_cmake_args="-DPICOTOOL_FETCH_FROM_GIT_PATH=/firmware/adsbee_1421/.picotool"
             # Bake the ti hex of the same config, so `-d build_and_flash` flashes a Debug image.
-            extra_cmake_args+=" -DADSBEE_1421_HEX=/firmware/adsbee_1421/ti/build/${CONFIG}/adsbee_1421.hex"
+            extra_cmake_args+=" -DADSBEE_1421_HEX=/firmware/adsbee_1421/ti/build/${BUILD_VARIANT}/adsbee_1421.hex"
             ;;
     esac
 
-    echo "Building ${app} (${CONFIG}) in container ${service} ..."
+    echo "Building ${app} (${BUILD_VARIANT}) in container ${service} ..."
 
     # Keep the toolchain container running so incremental rebuilds reuse the CMake cache.
     docker compose up -d "${service}"
@@ -114,8 +122,8 @@ build_app() {
     docker compose exec "${service}" bash -c "
         set -e
         cd /firmware/adsbee_1421/${app}
-        mkdir -p build/${CONFIG}
-        cd build/${CONFIG}
+        mkdir -p build/${BUILD_VARIANT}
+        cd build/${BUILD_VARIANT}
         cmake -DCMAKE_BUILD_TYPE=${CONFIG} \
               -DCMAKE_C_COMPILER=/usr/bin/arm-none-eabi-gcc \
               -DCMAKE_CXX_COMPILER=/usr/bin/arm-none-eabi-g++ ${extra_cmake_args} ../..
@@ -124,7 +132,7 @@ build_app() {
 
     echo ""
     echo "Build complete. Artifacts:"
-    local out="${app}/build/${CONFIG}"
+    local out="${app}/build/${BUILD_VARIANT}"
     local ext f
     # Both the stable names (adsbee_1421.hex) and CMake's version-stamped copies
     # (adsbee_1421-0.3.6.hex) are produced, so glob to list them all.
@@ -137,8 +145,8 @@ build_app() {
 
 # Programmer image the flash commands push, and the CC1314 hex baked into it at configure time (see
 # programmer/README.md). A rebuilt ti with a stale Programmer image would flash old m1421 firmware.
-programmer_uf2_path() { echo "programmer/build/${CONFIG}/adsbee_1421_programmer.uf2"; }
-ti_hex_path() { echo "ti/build/${CONFIG}/adsbee_1421.hex"; }
+programmer_uf2_path() { echo "programmer/build/${BUILD_VARIANT}/adsbee_1421_programmer.uf2"; }
+ti_hex_path() { echo "ti/build/${BUILD_VARIANT}/adsbee_1421.hex"; }
 
 flash_m1421() {
     local uf2

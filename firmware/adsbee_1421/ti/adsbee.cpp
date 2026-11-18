@@ -13,6 +13,7 @@
 #include "buffer_utils.hh"
 #include "comms.hh"
 #include "cycle_counter.hh"
+#include "gnss_interface.hh"
 #include "led.hh"
 #include "sync_policy.hh"
 #include "mlat/mlat_capture.hh"
@@ -568,10 +569,19 @@ void ADSBee::UpdateRxPosition() {
             }
             break;
         }
-        case SettingsManager::RxPosition::PositionSource::kPositionSourceGNSS:
-            // No GNSS receiver on this board; position must come from another source.
-            rx_position_available = false;
+        case SettingsManager::RxPosition::PositionSource::kPositionSourceGNSS: {
+            const auto* fix = gnss_receiver.GetFix();
+            rx_position_available = fix != nullptr;
+            if (fix) {
+                rx_position.latitude_deg = fix->latitude_deg;
+                rx_position.longitude_deg = fix->longitude_deg;
+                rx_position.gnss_altitude_ft = fix->altitude_ft;
+                rx_position.baro_altitude_ft = 0;
+                rx_position.heading_deg = fix->heading_deg;
+                rx_position.speed_kts = fix->speed_kts;
+            }
             break;
+        }
         case SettingsManager::RxPosition::PositionSource::kPositionSourceFixed:
             // Fixed position is always available.
             rx_position_available = true;

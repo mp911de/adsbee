@@ -13,7 +13,7 @@ enum Scope : uint8_t {
 
 // Left out of kScopeFleet: the receiver position values and the ASTERIX SIC.
 inline uint32_t Compute(const SettingsManager::Settings& settings, Scope scope) {
-    static_assert(kSettingsVersion == 7 && sizeof(SettingsManager::Settings) == 79,
+    static_assert(kSettingsVersion == 8 && sizeof(SettingsManager::Settings) == 88,
                   "Settings changed: add the new fields below, then update this check.");
     ConfigHasher hasher;
 
@@ -51,6 +51,12 @@ inline uint32_t Compute(const SettingsManager::Settings& settings, Scope scope) 
     hasher.AddI32(settings.filter_altitude_a_ft);
     hasher.AddI32(settings.filter_altitude_b_ft);
     hasher.AddBool(settings.led_enabled);
+    hasher.AddBool(settings.gnss_enabled);
+    hasher.AddU8(settings.gnss_receiver_type);
+    hasher.AddBool(settings.gnss_notify);
+    hasher.AddBool(settings.gnss_diagnostics);
+    hasher.AddU8(settings.gnss_antenna);
+    hasher.AddU32(settings.gnss_baud_rate);
 
     return hasher.Value();
 }

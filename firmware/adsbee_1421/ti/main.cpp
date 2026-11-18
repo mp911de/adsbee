@@ -16,6 +16,7 @@ extern "C" {
 #include "bsp.hh"
 #include "comms.hh"
 #include "cycle_counter.hh"
+#include "gnss_interface.hh"
 #include "hal.hh"  // For get_time_since_boot_us.
 #include "led.hh"
 #include "object_dictionary.hh"
@@ -52,6 +53,26 @@ Ownship ownship;  // Never set here. The shared GDL90 reporting reads it.
 PacketDecoder packet_decoder;
 SubGHzRadio subg_radio({});
 UATPacketDecoder uat_packet_decoder;
+
+// Also service both radios during a synchronous GNSS diagnostic poll on the console.
+static bool ServiceRadioReceivers() {
+    if (adsbee.SyncSleepRequested()) return false;
+    const uint32_t start = CycleCounter::Now();
+    adsbee.Update();
+    packet_decoder.Update();
+    adsbee.rx1090_total_cycles += CycleCounter::Since(start);
+    subg_radio.Update();
+    uat_packet_decoder.Update();
+    return true;
+}
+
+static bool ServiceDuringGNSSPoll() {
+    if (!ServiceRadioReceivers() || adsbee.SyncSleepRequested()) return false;
+    comms_manager.ServiceReports();
+    return !adsbee.SyncSleepRequested();
+}
+
+GNSSReceiver gnss_receiver(ServiceDuringGNSSPoll);
 
 /**
  * A note on interrupt priorities (configured via SysConfig in syscfg/adsbee_1421.syscfg):
@@ -107,6 +128,7 @@ int main(void) {
 
     /* Call driver init functions */
     Board_init();
+    gnss_receiver.Stop();  // Disconnect the spare pads until GNSS is enabled.
     leds.Init();
     comms_manager.Init();
 
@@ -161,6 +183,7 @@ int main(void) {
         // and puts the MCU into STANDBY (SRAM retained) until SYNC drops, re-initializing the LR2021 on
         // wake. Resume() restarts UAT reception. Restart the loop cleanly afterward.
         if (adsbee.SyncSleepRequested()) {
+            if (!gnss_receiver.Stop()) continue;
             leds.Suspend();           // stop the periodic LED clock, which would otherwise block STANDBY
             subg_radio.Suspend();     // release the RF core's STANDBY power constraint
             comms_manager.Suspend();  // release the UART RX STANDBY power constraint
@@ -178,12 +201,8 @@ int main(void) {
         // leds.FlashLED(bsp.k1090LEDPin, 100);  // Flash the LED for 100ms.
         // usleep(1000000);                        // Sleep for 1 second.
         // mode_s_radio.Update();
-        const uint32_t rx1090_start_cycles = CycleCounter::Now();
-        adsbee.Update();
-        packet_decoder.Update();
-        adsbee.rx1090_total_cycles += CycleCounter::Since(rx1090_start_cycles);
-        subg_radio.Update();
-        uat_packet_decoder.Update();
+        if (!ServiceRadioReceivers()) continue;
+        gnss_receiver.Update();
         comms_manager.Update();
         // Track the longest loop iteration (AT+RX_STATS max_loop_us) as the receiver's stall gauge.
         uint32_t loop_us = static_cast<uint32_t>(get_time_since_boot_us() - loop_start_us);

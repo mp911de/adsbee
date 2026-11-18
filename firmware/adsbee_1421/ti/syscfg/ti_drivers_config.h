@@ -65,6 +65,9 @@ extern const uint_least8_t SYNC_CONST;
 extern const uint_least8_t LR_IRQ_CONST;
 #define LR_IRQ 12
 
+extern const uint_least8_t GNSS_PPS_CONST;
+#define GNSS_PPS 25
+
 /* Owned by COPRO_SPI as  */
 extern const uint_least8_t COPRO_SPI_SCLK_CONST;
 #define COPRO_SPI_SCLK 10
@@ -84,6 +87,12 @@ extern const uint_least8_t SUBG_UART_TX_CONST;
 /* Owned by SUBG_UART as  */
 extern const uint_least8_t SUBG_UART_RX_CONST;
 #define SUBG_UART_RX 2
+
+extern const uint_least8_t GNSS_TX_CONST;
+#define GNSS_TX 23
+
+extern const uint_least8_t GNSS_RX_CONST;
+#define GNSS_RX 24
 
 /* The range of pins available on this device */
 extern const uint_least8_t GPIO_pinLowerBound;
@@ -123,7 +132,9 @@ extern const uint_least8_t              COPRO_SPI_CONST;
  */
 extern const uint_least8_t                  SUBG_UART_CONST;
 #define SUBG_UART                           0
-#define CONFIG_TI_DRIVERS_UART2_COUNT       1
+extern const uint_least8_t                  GNSS_UART_CONST;
+#define GNSS_UART                           1
+#define CONFIG_TI_DRIVERS_UART2_COUNT       2
 
 
 /*

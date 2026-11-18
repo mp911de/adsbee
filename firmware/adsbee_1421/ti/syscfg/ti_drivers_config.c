@@ -85,9 +85,9 @@ GPIO_PinConfig gpioPinConfigs[48] = {
     GPIO_CFG_NO_DIR, /* DIO_20 */
     GPIO_CFG_NO_DIR, /* DIO_21 */
     GPIO_CFG_NO_DIR, /* DIO_22 */
-    GPIO_CFG_NO_DIR, /* DIO_23 */
-    GPIO_CFG_NO_DIR, /* DIO_24 */
-    GPIO_CFG_NO_DIR, /* DIO_25 */
+    GPIO_CFG_INPUT_INTERNAL | GPIO_CFG_IN_INT_NONE | GPIO_CFG_PULL_NONE_INTERNAL, /* GNSS_TX */
+    GPIO_CFG_INPUT_INTERNAL | GPIO_CFG_IN_INT_NONE | GPIO_CFG_PULL_NONE_INTERNAL, /* GNSS_RX */
+    GPIO_CFG_INPUT_INTERNAL | GPIO_CFG_IN_INT_NONE | GPIO_CFG_PULL_NONE_INTERNAL, /* GNSS_PPS */
     GPIO_CFG_OUTPUT_INTERNAL | GPIO_CFG_OUT_STR_MED | GPIO_CFG_OUT_LOW, /* SUBG_DIO26 */
     GPIO_CFG_OUTPUT_INTERNAL | GPIO_CFG_OUT_STR_MED | GPIO_CFG_OUT_LOW, /* SUBG_DIO27 */
     GPIO_CFG_NO_DIR, /* DIO_28 */
@@ -135,11 +135,14 @@ const uint_least8_t RSUBG_LED_CONST = RSUBG_LED;
 const uint_least8_t SUBG_DIO27_CONST = SUBG_DIO27;
 const uint_least8_t SYNC_CONST = SYNC;
 const uint_least8_t LR_IRQ_CONST = LR_IRQ;
+const uint_least8_t GNSS_PPS_CONST = GNSS_PPS;
 const uint_least8_t COPRO_SPI_SCLK_CONST = COPRO_SPI_SCLK;
 const uint_least8_t COPRO_SPI_POCI_CONST = COPRO_SPI_POCI;
 const uint_least8_t COPRO_SPI_PICO_CONST = COPRO_SPI_PICO;
 const uint_least8_t SUBG_UART_TX_CONST = SUBG_UART_TX;
 const uint_least8_t SUBG_UART_RX_CONST = SUBG_UART_RX;
+const uint_least8_t GNSS_TX_CONST = GNSS_TX;
+const uint_least8_t GNSS_RX_CONST = GNSS_RX;
 
 /*
  *  ======== GPIO_config ========
@@ -277,7 +280,7 @@ const uint_least8_t SPI_count = CONFIG_SPI_COUNT;
 #include <ti/devices/cc13x4_cc26x4/inc/hw_memmap.h>
 #include <ti/devices/cc13x4_cc26x4/inc/hw_ints.h>
 
-#define CONFIG_UART2_COUNT 1
+#define CONFIG_UART2_COUNT 2
 
 UART2CC26X2_Object uart2CC26X2Objects[CONFIG_UART2_COUNT];
 
@@ -287,6 +290,11 @@ static unsigned char uart2TxRingBuffer0[32];
 
 ALLOCATE_CONTROL_TABLE_ENTRY(dmaUart0RxControlTableEntry, UDMA_CHAN_UART0_RX);
 ALLOCATE_CONTROL_TABLE_ENTRY(dmaUart0TxControlTableEntry, UDMA_CHAN_UART0_TX);
+
+static unsigned char uart2RxRingBuffer1[256];
+static unsigned char uart2TxRingBuffer1[144];
+ALLOCATE_CONTROL_TABLE_ENTRY(dmaUart1RxControlTableEntry, UDMA_CHAN_UART1_RX);
+ALLOCATE_CONTROL_TABLE_ENTRY(dmaUart1TxControlTableEntry, UDMA_CHAN_UART1_TX);
 
 static const UART2CC26X2_HWAttrs uart2CC26X2HWAttrs[CONFIG_UART2_COUNT] = {
   {
@@ -314,6 +322,31 @@ static const UART2CC26X2_HWAttrs uart2CC26X2HWAttrs[CONFIG_UART2_COUNT] = {
     .txIntFifoThr       = UART2CC26X2_FIFO_THRESHOLD_1_8,
     .rxIntFifoThr       = UART2CC26X2_FIFO_THRESHOLD_4_8
   },
+  {
+    .baseAddr           = UART1_BASE,
+    .intNum             = INT_UART1_COMB,
+    .intPriority        = (~0),
+    .rxPin              = GNSS_RX,
+    .txPin              = GNSS_TX,
+    .ctsPin             = GPIO_INVALID_INDEX,
+    .rtsPin             = GPIO_INVALID_INDEX,
+    .flowControl        = UART2_FLOWCTRL_NONE,
+    .powerId            = PowerCC26XX_PERIPH_UART1,
+    .rxBufPtr           = uart2RxRingBuffer1,
+    .rxBufSize          = sizeof(uart2RxRingBuffer1),
+    .txBufPtr           = uart2TxRingBuffer1,
+    .txBufSize          = sizeof(uart2TxRingBuffer1),
+    .txPinMux           = IOC_PORT_MCU_UART1_TX,
+    .rxPinMux           = IOC_PORT_MCU_UART1_RX,
+    .ctsPinMux          = IOC_PORT_MCU_UART1_CTS,
+    .rtsPinMux          = IOC_PORT_MCU_UART1_RTS,
+    .dmaTxTableEntryPri = &dmaUart1TxControlTableEntry,
+    .dmaRxTableEntryPri = &dmaUart1RxControlTableEntry,
+    .rxChannelMask      = 1 << UDMA_CHAN_UART1_RX,
+    .txChannelMask      = 1 << UDMA_CHAN_UART1_TX,
+    .txIntFifoThr       = UART2CC26X2_FIFO_THRESHOLD_1_8,
+    .rxIntFifoThr       = UART2CC26X2_FIFO_THRESHOLD_4_8
+  },
 };
 
 const UART2_Config UART2_config[CONFIG_UART2_COUNT] = {
@@ -321,9 +354,14 @@ const UART2_Config UART2_config[CONFIG_UART2_COUNT] = {
         .object      = &uart2CC26X2Objects[SUBG_UART],
         .hwAttrs     = &uart2CC26X2HWAttrs[SUBG_UART]
     },
+    {   /* GNSS_UART */
+        .object      = &uart2CC26X2Objects[GNSS_UART],
+        .hwAttrs     = &uart2CC26X2HWAttrs[GNSS_UART]
+    },
 };
 
 const uint_least8_t SUBG_UART_CONST = SUBG_UART;
+const uint_least8_t GNSS_UART_CONST = GNSS_UART;
 const uint_least8_t UART2_count = CONFIG_UART2_COUNT;
 
 

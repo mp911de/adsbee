@@ -10,6 +10,7 @@
 #   cmake --build <dir> --target ccfg_bootloader_test && ctest --test-dir <dir> -R ccfg_bootloader --output-on-failure
 cmake_minimum_required(VERSION 3.13)
 project(adsbee_1421_host_test CXX)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/profile.cmake")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,9 +42,11 @@ target_sources(host_test PRIVATE
     ${ADSBEE_1421_TI_DIR}/settings/settings_strs.cpp
     ${ADSBEE_COMMON_DIR}/adsb/decode_utils.cpp
     ${ADSBEE_COMMON_DIR}/adsb/mode_s_packet.cpp
+    ${ADSBEE_COMMON_DIR}/gnss/nmea_parser.cc
     ${ADSBEE_COMMON_DIR}/utils/buffer_utils.cpp
     ${ADSBEE_COMMON_DIR}/utils/crc/crc.cpp  # crc32_ieee_802_3 for Settings::IsValid(), and the Mode S CRC.
     test_led_blink_args.cc
+    test_gnss_navigation.cc
     test_lr2021_drain_state.cc
     test_lr2021_ook_adsb.cc
     test_lr2021_status_tracker.cc
@@ -63,7 +66,9 @@ set_source_files_properties(${ADSBEE_COMMON_DIR}/adsb/mode_s_packet.cpp PROPERTI
 target_include_directories(host_test PRIVATE
     ${ADSBEE_MODULES_DIR}/googletest/googletest/include
     ${ADSBEE_1421_TI_DIR}
+    ${ADSBEE_COMMON_DIR}
     ${ADSBEE_1421_TI_DIR}/lr2021
+    ${ADSBEE_COMMON_DIR}/gnss
     ${ADSBEE_1421_TI_DIR}/settings
     ${ADSBEE_COMMON_DIR}/adsb
     ${ADSBEE_COMMON_DIR}/comms/uat_uplink

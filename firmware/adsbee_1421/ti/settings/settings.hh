@@ -6,6 +6,7 @@
 #include <functional>  // for strtoull
 
 #include "crc.hh"
+#include "settings/gnss_settings_options.hh"
 #include "macros.hh"
 #include "altitude_filter.hh"
 #include "unit_conversions.hh"  // DeciNmToMeters
@@ -17,7 +18,7 @@
 #endif
 
 // Change this when settings format changes! A mismatched version resets all settings to factory defaults on boot.
-static constexpr uint32_t kSettingsVersion = 7;
+static constexpr uint32_t kSettingsVersion = 8;
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 // Leading word of a valid settings blob. Deliberately not 0x00000000 or 0xFFFFFFFF so that blank,
@@ -25,10 +26,18 @@ static constexpr uint32_t kDeviceInfoVersion = 2;
 // struct. Paired with the trailing CRC32; see SettingsManager::Settings::IsValid().
 static constexpr uint32_t kSettingsMagic = 0x14215E77;
 
-class SettingsManager {
+class SettingsManager : public GNSSSettingsOptions {
    public:
     // Serial Interface enum and string conversion array.
     enum SerialInterface : uint16_t { kConsole = 0, kNumSerialInterfaces };
+    static constexpr uint32_t kGNSSBaudRates[] = {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600};
+
+    static constexpr bool IsGNSSBaudRate(uint32_t rate) {
+        for (uint32_t supported : kGNSSBaudRates) {
+            if (supported == rate) return true;
+        }
+        return false;
+    }
 
     // Maximum number of sinks that can be passed to CommsManager::UpdateReporting() in a single call.
     // The 1421 has no IP feeds, so this is just the serial interface count. Per-protocol sink arrays in
@@ -104,8 +113,8 @@ class SettingsManager {
         PositionSource source = kPositionSourceLowestAircraft;
         float latitude_deg = 0.0;      // Degrees, WGS84
         float longitude_deg = 0.0;     // Degrees, WGS84
-        int32_t gnss_altitude_ft = 0;  // Meters, WGS84
-        int32_t baro_altitude_ft = 0;  // Meters, AMSL
+        int32_t gnss_altitude_ft = 0;  // Feet, MSL
+        int32_t baro_altitude_ft = 0;  // Feet, pressure altitude
         float heading_deg = 0.0;       // Degrees from true north
         int32_t speed_kts = 0;         // Speed over ground in knots
         uint32_t icao_address =
@@ -146,6 +155,11 @@ class SettingsManager {
         // Single source of truth for the console boot baud rate: CommsManagerConfig defaults to this,
         // and Apply() falls back to it if the stored rate isn't whitelisted.
         static constexpr uint32_t kDefaultUARTBaudRate = 1000000;
+#ifdef AIRGREP
+        static constexpr uint32_t kDefaultGNSSBaudRate = 115200;
+#else
+        static constexpr uint32_t kDefaultGNSSBaudRate = 9600;
+#endif
 
         // Network-related string length constants. The 1421 has no network interfaces, but
         // common/coprocessor/object_dictionary.hh (pulled in via spi_coprocessor_packet.hh from
@@ -216,6 +230,14 @@ class SettingsManager {
         // lights them).
         bool led_enabled = true;
 
+        // GNSS receiver on UART1 (AT+GNSS, AT+BAUD_RATE=GNSS), added in version 8.
+        bool gnss_enabled = false;
+        GNSSReceiverType gnss_receiver_type = kGNSSReceiverNone;
+        bool gnss_notify = false;
+        bool gnss_diagnostics = false;
+        GNSSAntennaMode gnss_antenna = kGNSSAntennaUnknown;
+        uint32_t gnss_baud_rate = kDefaultGNSSBaudRate;
+
         // Integrity check over every preceding byte. Must stay the last member; stamped by Stamp().
         uint32_t crc = 0;
 
@@ -268,27 +290,29 @@ class SettingsManager {
 
     // Older settings versions are today's fields up to a cutoff, then the CRC. Version 6 appended
     // filter_distance_enabled, filter_distance_deci_nm, asterix_sac, asterix_sic and filter_altitude_*; version 7
-    // appended led_enabled.
+    // appended led_enabled; version 8 appended gnss_*.
     static constexpr uint16_t kVersion5SettingsSize = 62;
     static constexpr uint16_t kVersion6SettingsSize = 78;
-    static_assert(kSettingsVersion == 7 &&
+    static constexpr uint16_t kVersion7SettingsSize = 79;
+    static_assert(kSettingsVersion == 8 &&
                       offsetof(Settings, filter_distance_enabled) == kVersion5SettingsSize - sizeof(uint32_t) &&
                       offsetof(Settings, led_enabled) == kVersion6SettingsSize - sizeof(uint32_t) &&
-                      sizeof(Settings) == kVersion6SettingsSize + 1,
+                      offsetof(Settings, gnss_enabled) == kVersion7SettingsSize - sizeof(uint32_t) &&
+                      sizeof(Settings) == kVersion7SettingsSize + 9,
                   "Settings changed: update MigrateFromOlderVersion.");
 
     /**
-     * Converts a version 5 or 6 settings blob, so a firmware update keeps the user's settings. Fields added since
+     * Converts a version 5, 6 or 7 settings blob, so a firmware update keeps the user's settings. Fields added since
      * take their defaults.
      * @param[in] blob Stored bytes, at least sizeof(Settings) long.
      * @param[out] out Migrated and stamped settings. Untouched unless the blob is an intact older blob.
-     * @retval Version migrated from, or 0 if the blob is not an intact version 5 or 6 blob.
+     * @retval Version migrated from, or 0 if the blob is not an intact version 5, 6 or 7 blob.
      */
     static uint32_t MigrateFromOlderVersion(const uint8_t *blob, Settings &out) {
         static constexpr struct {
             uint32_t version;
             uint16_t size;
-        } kOlderVersions[] = {{5, kVersion5SettingsSize}, {6, kVersion6SettingsSize}};
+        } kOlderVersions[] = {{5, kVersion5SettingsSize}, {6, kVersion6SettingsSize}, {7, kVersion7SettingsSize}};
         uint32_t magic, version;
         memcpy(&magic, blob, sizeof(magic));
         memcpy(&version, blob + sizeof(magic), sizeof(version));

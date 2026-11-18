@@ -5543,7 +5543,7 @@ function makeRxEnableEntry() {
                 // and deliver them in a burst afterwards, after the probe job that sent
                 // them has given up. Only a user-typed (visible) AT+BAUD_RATE? gets to
                 // print this line.
-                if (/^BAUD_RATE=CONSOLE,\d+$/.test(t) && !(atQueue.current && atQueue.current.job.visible)) return;
+                if (/^BAUD_RATE=(CONSOLE|GNSS),\d+$/.test(t) && !(atQueue.current && atQueue.current.job.visible)) return;
                 if (t.startsWith('{')) {
                     // AIRCRAFT_JSON: newline-delimited readsb-style objects, one per aircraft.
                     // Always feed the store; hide the line from the terminal only while the
@@ -6602,6 +6602,16 @@ function makeRxEnableEntry() {
             makeAsterixSacSicEntry(),
             // ── Position ──
             makeRxPositionEntry(),
+            {
+                cmd: 'GNSS', label: 'GNSS Receiver', group: 'Position',
+                fields: [
+                    { id: 'en', label: 'Enabled', type: 'bool' },
+                    { id: 'type', label: 'Receiver Type', type: 'enum', options: ['NONE', 'GENERIC', 'UBX_MIA'] },
+                    { id: 'notify', label: 'Print fix notifications', type: 'bool' },
+                    { id: 'diagnostics', label: 'M10 diagnostic telemetry', type: 'bool' },
+                    { id: 'antenna', label: 'Antenna', type: 'enum', options: ['UNKNOWN', 'PASSIVE', 'ACTIVE', 'ACTIVE_SUPERVISED'] },
+                ],
+            },
             // ── Serial ──
             {
                 cmd: 'BAUD_RATE', label: 'Console Baud Rate', group: 'Serial',
@@ -7683,7 +7693,9 @@ function makeRxEnableEntry() {
                     const lines = await atQueue.send('AT+BAUD_RATE?\r\n',
                         { expect: /^BAUD_RATE=CONSOLE,\d+/, terminator: 'quiet', quietMs: 250, timeoutMs: 700 });
                     for (const l of lines) {
-                        const n = parseInt(l.split(',')[1], 10);
+                        const match = l.match(/^BAUD_RATE=CONSOLE,(\d+)$/);
+                        if (!match) continue;
+                        const n = Number(match[1]);
                         if (isConsoleBaud(n)) return n;
                     }
                 } catch (_) { }

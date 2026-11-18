@@ -37,8 +37,7 @@ TEST(Settings, R1090PreambleModeNamesSelectTheirModes) {
 }
 
 TEST(Settings, VersionNumberingModesIsCurrent) {
-    // Version 5 numbers R1090PreambleMode as above; versions 6 and 7 keep that numbering.
-    EXPECT_EQ(kSettingsVersion, 7u);
+    EXPECT_EQ(kSettingsVersion, 8u);
     SM::Settings settings;
     settings.Stamp();
     EXPECT_TRUE(settings.IsValid());
@@ -134,7 +133,7 @@ TEST(Settings, Version6BlobMigratesWithLEDsEnabled) {
     out.led_enabled = false;
     ASSERT_EQ(SM::MigrateFromOlderVersion(blob, out), 6u);
     EXPECT_TRUE(out.IsValid());
-    EXPECT_EQ(out.settings_version, 7u);
+    EXPECT_EQ(out.settings_version, kSettingsVersion);
     EXPECT_TRUE(out.led_enabled);
     // Every version 6 field is kept.
     SM::Settings expected = current;
@@ -144,6 +143,23 @@ TEST(Settings, Version6BlobMigratesWithLEDsEnabled) {
 
     // A torn version 6 blob is left to the reset path.
     blob[SM::kVersion6SettingsSize - 5] ^= 1;
+    EXPECT_EQ(SM::MigrateFromOlderVersion(blob, out), 0u);
+}
+
+TEST(Settings, Version7KeepsGNSSPositionSelectionWithPortDisabled) {
+    SM::Settings current;
+    current.rx_position.source = SM::RxPosition::kPositionSourceGNSS;
+    current.led_enabled = false;
+    uint8_t blob[sizeof(SM::Settings)];
+    MakeOlderBlob(current, 7, SM::kVersion7SettingsSize, blob, sizeof(blob));
+    SM::Settings out;
+    out.gnss_enabled = true;
+    ASSERT_EQ(SM::MigrateFromOlderVersion(blob, out), 7u);
+    EXPECT_TRUE(out.IsValid());
+    current.Stamp();
+    EXPECT_EQ(0, memcmp(&out, &current, sizeof(out)));
+    EXPECT_FALSE(out.gnss_enabled);
+    blob[SM::kVersion7SettingsSize - 1] ^= 1;
     EXPECT_EQ(SM::MigrateFromOlderVersion(blob, out), 0u);
 }
 
@@ -157,7 +173,7 @@ TEST(Settings, CurrentOrUnknownBlobsAreNotMigrated) {
     EXPECT_EQ(SM::MigrateFromOlderVersion(blank, out), 0u);
 }
 
-TEST(Settings, Version7BlobIsRejectedByVersion6Firmware) {
+TEST(Settings, CurrentBlobIsRejectedByVersion6Firmware) {
     // rc10 (version 6) checks magic, version 6 and the CRC over its first 74 bytes, so a version 7 blob fails its
     // check and rc10 resets to defaults on a downgrade.
     SM::Settings current;
@@ -186,5 +202,5 @@ TEST(Settings, ASTERIXDataSourceDefaultsToZero) {
     SM::Settings settings;
     EXPECT_EQ(settings.asterix_sac, 0);
     EXPECT_EQ(settings.asterix_sic, 0);
-    EXPECT_EQ(sizeof(SM::Settings), 79u);
+    EXPECT_EQ(sizeof(SM::Settings), 88u);
 }

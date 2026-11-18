@@ -11,6 +11,7 @@
 #include "object_dictionary.hh"
 #include "packet_decoder.hh"
 #include "flash_utils.hh"
+#include "gnss_interface.hh"
 #include "led.hh"
 #include "led_blink_args.hh"
 #include "settings.hh"
@@ -58,22 +59,32 @@ int CppAT::cpp_at_printf(const char* format, ...) {
 CPP_AT_CALLBACK(CommsManager::ATBaudRateCallback) {
     switch (op) {
         case '?':
-            // Prints "BAUD_RATE=CONSOLE,<baud>".
             CPP_AT_CMD_PRINTF("=%s,%lu",
                               SettingsManager::kSerialInterfaceStrs[SettingsManager::SerialInterface::kConsole],
                               (unsigned long)GetBaudRate());
+            CPP_AT_CMD_PRINTF("=GNSS,%lu", (unsigned long)settings_manager.settings.gnss_baud_rate);
             CPP_AT_SILENT_SUCCESS();
             break;
         case '=': {
             if (!(CPP_AT_HAS_ARG(0) && CPP_AT_HAS_ARG(1))) {
-                CPP_AT_ERROR("Requires two arguments: AT+BAUD_RATE=CONSOLE,<baud>.");
-            }
-            if (args[0].compare(
-                    SettingsManager::kSerialInterfaceStrs[SettingsManager::SerialInterface::kConsole]) != 0) {
-                CPP_AT_ERROR("Invalid interface %s; only CONSOLE is supported.", args[0].data());
+                CPP_AT_ERROR("Requires AT+BAUD_RATE=<CONSOLE|GNSS>,<baud>.");
             }
             uint32_t baud;
             CPP_AT_TRY_ARG2NUM(1, baud);
+            if (args[0] == "GNSS") {
+                if (!SettingsManager::IsGNSSBaudRate(baud)) {
+                    CPP_AT_ERROR("Unsupported GNSS baud rate %lu.", (unsigned long)baud);
+                }
+                if (!gnss_receiver.SetBaudrate(baud)) {
+                    CPP_AT_ERROR("GNSS baud change to %lu failed.", (unsigned long)baud);
+                }
+                settings_manager.settings.gnss_baud_rate = baud;
+                CPP_AT_SUCCESS();
+            }
+            if (args[0].compare(
+                    SettingsManager::kSerialInterfaceStrs[SettingsManager::SerialInterface::kConsole]) != 0) {
+                CPP_AT_ERROR("Invalid interface %s. Use CONSOLE or GNSS.", args[0].data());
+            }
             if (!IsAllowedBaudRate(baud)) {
                 CPP_AT_ERROR("Baud %lu not supported: the console runs at %lu to %lu baud.", (unsigned long)baud,
                              (unsigned long)ConsoleBaud::kMin, (unsigned long)ConsoleBaud::kMax);
@@ -1043,13 +1054,16 @@ static void PrintSettingsJSON() {
 
     CPP_AT_PRINTF("SETTINGS={");
     CPP_AT_PRINTF("\"ASTERIX_SAC_SIC\":[%u,%u],", s.asterix_sac, s.asterix_sic);
-    CPP_AT_PRINTF("\"BAUD_RATE\":[%lu],", (unsigned long)comms_manager.GetBaudRate());
+    CPP_AT_PRINTF("\"BAUD_RATE\":[%lu,%lu],", (unsigned long)comms_manager.GetBaudRate(), (unsigned long)s.gnss_baud_rate);
     CPP_AT_PRINTF("\"BOOTLOADER_PIN\":[%d],", CcfgBootloader::BackdoorEnabled(CcfgBootloader::ReadBlConfig()));
     CPP_AT_PRINTF("\"FILTER_ALTITUDE_FT\":[\"%s\",%ld,%ld],", AltitudeFilterModeStr(s.filter_altitude_mode),
                   (long)s.filter_altitude_a_ft, (long)s.filter_altitude_b_ft);
     CPP_AT_PRINTF("\"FILTER_DISTANCE_NM\":[%d,%lu.%lu],", s.filter_distance_enabled,
                   static_cast<unsigned long>(s.filter_distance_deci_nm / 10),
                   static_cast<unsigned long>(s.filter_distance_deci_nm % 10));
+    CPP_AT_PRINTF("\"GNSS\":[%d,\"%s\",%d,%d,\"%s\"],", s.gnss_enabled,
+                  SettingsManager::GNSSReceiverTypeToStr(s.gnss_receiver_type), s.gnss_notify, s.gnss_diagnostics,
+                  SettingsManager::GNSSAntennaModeToStr(s.gnss_antenna));
     CPP_AT_PRINTF("\"LOG_LEVEL\":[\"%s\"],", SettingsManager::kConsoleLogLevelStrs[s.log_level]);
     CPP_AT_PRINTF("\"LR_ENABLE\":[%d],", adsbee.LR2021IsEnabled());
     CPP_AT_PRINTF("\"MAVLINK_ID\":[%d,%d],", s.mavlink_system_id, s.mavlink_component_id);
@@ -1529,7 +1543,9 @@ const CppAT::ATCommandDef_t at_command_list[] = {
                     "ADSBee 1421 Programmer, keep the port open and wait for OK before the next command. Persists only "
                     "after AT+SETTINGS=SAVE. Boot default is 1000000; AT+SETTINGS=RESET restores it. A break on the "
                     "console RX line gets \"UU\" at the current rate.\r\n\t"
-                    "AT+BAUD_RATE?\r\n\tQuery the current console baud rate.",
+                    "AT+BAUD_RATE=GNSS,<baud>\r\n\tSet GNSS UART baud: 9600, 19200, 38400, 57600, 115200, 230400, "
+                    "460800 or 921600. AT+SETTINGS=SAVE persists it.\r\n\t"
+                    "AT+BAUD_RATE?\r\n\tQuery console and GNSS baud rates.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATBaudRateCallback, comms_manager)},
     {.command = "BOOTLOADER_PIN",
      .min_args = 0,
@@ -1582,6 +1598,42 @@ const CppAT::ATCommandDef_t at_command_list[] = {
                     "no receiver position, see AT+RX_POSITION) are always kept. Default: 0,100.0 (off).\r\n\t"
                     "AT+FILTER_DISTANCE_NM?\r\n\tQuery whether the filter is enabled and its distance.",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATFilterDistanceNMCallback, comms_manager)},
+    {.command = "GNSS",
+     .min_args = 0,
+     .max_args = 5,
+     .help_string = "AT+GNSS=<enable>[,<type>[,<notify>[,<diagnostics>[,<antenna>]]]]\r\n\tEnable or disable the GNSS UART and PPS input, optionally "
+                    "select the GNSS type, and enable GNSS_FIX log messages for when the GNSS fix becomes valid or invalid. Notify defaults to off. "
+                    "Notifications require AT+LOG_LEVEL=INFO. Diagnostics enables five-second M10 RF reports. "
+                    "Diagnostics defaults to off; omitting it preserves the saved setting. "
+                    "Poll AT+GNSS_FIX? to read the fix programmatically. "
+                    "Type is optional, when not present the last configured type is reused, default is NONE; GNSS cannot be enabled while the saved type is NONE. "
+                    "Antenna is UNKNOWN (default), PASSIVE, ACTIVE or ACTIVE_SUPERVISED; ACTIVE_SUPERVISED turns on the M10 antenna "
+                    "supervisor on boards wired for it. Omitting it preserves the saved setting."
+                    "\r\n\tAT+GNSS?\r\n\tQuery the GNSS system state, type, notification, diagnostics and antenna settings",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSCallback, comms_manager)},
+    {.command = "GNSS_FIX",
+     .min_args = 0,
+     .max_args = 0,
+     .help_string = "AT+GNSS_FIX?\r\n\tReturn fix validity, latitude and longitude in degrees, altitude in feet, "
+                    "heading in degrees true, groundspeed in knots, active satellites, UTC time, PPS count "
+                    "since the last GNSS enable or disable operation and UTC epoch in ms.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSFixCallback, comms_manager)},
+    {.command = "GNSS_STATUS",
+     .min_args = 0,
+     .max_args = 0,
+     .help_string =
+         "AT+GNSS_STATUS?\r\n\tReturn module, software version, hardware version, BBR status, HDOP, antenna status "
+         "[INIT DONTKNOW OK SHORT OPEN], antenna power [OFF ON DONTKNOW], best C/N0 in dBHz, satellites seen, then satellites with no signal, searching, acquired, unusable, locked, with "
+         "ephemeris, used, healthy and unhealthy, SBAS mode, SBAS system, satellites in the SBAS report, and the "
+         "first corrected satellite's pseudorange and ionosphere corrections in cm. Reads stored records only. "
+         "Missing RF, satellite and SBAS records, or records older than 15 s, read -1 or UNKNOWN. HDOP comes from the last GGA.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSStatusCallback, comms_manager)},
+    {.command = "GNSS_DIAG",
+     .min_args = 0,
+     .max_args = 0,
+     .help_string = "AT+GNSS_DIAG?\r\n\tPrint the latest M10 RF and SBAS records with their age, then poll MON-COMMS "
+                    "and MON-HW3 from the module. For people, not for parsing.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATGNSSDiagCallback, comms_manager)},
     {.command = "LED_BLINK",
      .min_args = 2,
      .max_args = 4,

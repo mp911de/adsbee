@@ -59,6 +59,7 @@ class CommsManager {
 
     bool Init();
     bool Update();
+    void ServiceReports();
 
     /**
      * Quiesces the console UART so the MCU can enter STANDBY. UART2_rxEnable() holds a
@@ -140,6 +141,10 @@ class CommsManager {
     CPP_AT_HELP_CALLBACK(ATOTAHelpCallback);
     CPP_AT_CALLBACK(ATR1090GainCallback);
     CPP_AT_CALLBACK(ATLEDBlinkCallback);
+    CPP_AT_CALLBACK(ATGNSSCallback);
+    CPP_AT_CALLBACK(ATGNSSFixCallback);
+    CPP_AT_CALLBACK(ATGNSSStatusCallback);
+    CPP_AT_CALLBACK(ATGNSSDiagCallback);
     CPP_AT_CALLBACK(ATLEDEnableCallback);
     CPP_AT_CALLBACK(ATLogLevelCallback);
     CPP_AT_CALLBACK(ATLREnableCallback);
