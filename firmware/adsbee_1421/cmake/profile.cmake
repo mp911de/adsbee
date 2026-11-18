@@ -1,0 +1,6 @@
+set(ADSBEE_PROFILE default CACHE STRING "Firmware profile (default or airgrep)")
+if(ADSBEE_PROFILE STREQUAL "airgrep")
+    add_compile_definitions(AIRGREP)
+elseif(NOT ADSBEE_PROFILE STREQUAL "default")
+    message(FATAL_ERROR "Unknown ADSBEE_PROFILE: ${ADSBEE_PROFILE}")
+endif()

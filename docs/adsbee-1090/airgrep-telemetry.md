@@ -28,7 +28,7 @@ report `DONTKNOW`.
 `AT+GNSS_STATUS?` returns one line for parsers, from stored records only:
 
 ```text
-GNSS_STATUS=<module>,<software>,<hardware>,<hdop>,<antenna>,<antenna_power>,<max_cno>,<seen>,<no_signal>,<searching>,<acquired>,<unusable>,<locked>,<ephemeris>,<used>,<healthy>,<unhealthy>,<sbas_mode>,<sbas_system>,<sbas_sats>,<prc_cm>,<ic_cm>
+GNSS_STATUS=<module>,<software>,<hardware>,<bbr>,<hdop>,<antenna>,<antenna_power>,<max_cno>,<seen>,<no_signal>,<searching>,<acquired>,<unusable>,<locked>,<ephemeris>,<used>,<healthy>,<unhealthy>,<sbas_mode>,<sbas_system>,<sbas_sats>,<prc_cm>,<ic_cm>
 ```
 
 - `antenna` is `INIT`, `DONTKNOW`, `OK`, `SHORT` or `OPEN`. `antenna_power` is `OFF`, `ON` or `DONTKNOW`.
@@ -36,7 +36,7 @@ GNSS_STATUS=<module>,<software>,<hardware>,<hdop>,<antenna>,<antenna_power>,<max
 - `no_signal`, `searching`, `acquired`, `unusable` and `locked` are the signal quality states; each
   satellite is in one.
 - `prc_cm` and `ic_cm` are the first corrected satellite's pseudorange and ionosphere corrections.
-- A value that is missing or older than 15 s reads `-1` or `UNKNOWN`.
+- Missing RF, satellite and SBAS records, or records older than 15 s, read `-1` or `UNKNOWN`. HDOP comes from the last GGA.
 
 `AT+GNSS_DIAG?` prints the latest RF and SBAS records
 with their age and polls MON-COMMS and MON-HW3 from the module, one labeled line
